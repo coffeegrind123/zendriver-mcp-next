@@ -49,13 +49,44 @@ def _safe_transaction_call(self: _zdc.Transaction, **response: Any) -> None:
     self.set_exception(_zdc.ProtocolException(f"could not parse the cdp response: {response}"))
 
 
+class _DomainList(list):  # type: ignore[type-arg]
+    """``enabled_domains`` that tolerates removing a domain twice.
+
+    zendriver's ``Connection._register_handlers`` finishes by removing every
+    domain no handler uses. It maps an event type to its domain module by
+    lowercasing the CDP domain name, which misses ``HeapProfiler``,
+    ``DOMStorage``, ``CSS`` and others, so such a domain lingers in the list.
+    Two concurrent ``send()`` calls then both run that final loop over a copy,
+    and the second ``remove`` raises ``ValueError: list.remove(x): x not in
+    list`` out of an unrelated command. Observed: start_screencast failing
+    after take_heap_snapshot. Removing an absent domain is a no-op here.
+    """
+
+    def remove(self, value: Any) -> None:
+        if value in self:
+            super().remove(value)
+
+
+_original_register_handlers = _zdc.Connection._register_handlers
+
+
+async def _register_handlers(self: _zdc.Connection) -> None:
+    if not isinstance(self.enabled_domains, _DomainList):
+        self.enabled_domains = _DomainList(self.enabled_domains)
+    await _original_register_handlers(self)
+
+
 def apply_zendriver_patches() -> None:
     """Install all compatibility patches. Safe to call multiple times."""
     if getattr(_zdc.Transaction, _PATCH_ATTR, False):
         return
     _zdc.Transaction.__call__ = _safe_transaction_call  # type: ignore[method-assign]
+    # type.__setattr__: zendriver's Connection refuses ordinary class-attribute
+    # assignment (it guards against state shared between connections), which
+    # does not apply to replacing a method.
+    type.__setattr__(_zdc.Connection, "_register_handlers", _register_handlers)
     setattr(_zdc.Transaction, _PATCH_ATTR, True)
-    logger.debug("zendriver Transaction.__call__ patched for parser-error handling")
+    logger.debug("zendriver patched: parser errors, domain removal race")
 
 
 # Apply at import time so anyone importing this module (transitively) is
