@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `execute_js` takes a `timeout` (1-115 s) for scripts that poll or retry, and a timeout
+  now warns that the script may still be running in the page.
+
+### Fixed
+- An extensions directory that could not be written (a sandbox, or a wheel installed in
+  site-packages) failed the whole browser launch. Extensions now live in the user cache,
+  fall back to the temp dir, and are loaded read-only when already installed.
+- Tests that stood up a silent endpoint took a minute each on Python 3.12.
+
 ## [0.5.0] - 2026-11-08
 
 First release as a standalone project.

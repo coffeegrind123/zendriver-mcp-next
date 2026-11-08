@@ -167,6 +167,7 @@ All settings are optional environment variables.
 | `ZENDRIVER_MCP_ARTIFACT_ROOT` | – | Extra directories, besides `$HOME` and the temp dir, that tools may write files to. |
 | `ZENDRIVER_MCP_SKIP_DISPLAY_CHECK` | off | Skips the X display pre-flight check before launching. |
 | `ZENDRIVER_MCP_CONFIG_DIR` | `~/.config/zendriver-mcp` | Where HTTP tokens are stored. |
+| `ZENDRIVER_MCP_EXTENSIONS_DIR` | `~/.cache/zendriver-mcp/extensions` | Where the bundled extensions are kept (uBlock Origin Lite and I Still Don't Care About Cookies, downloaded on first launch). Falls back to the temp dir when the cache cannot be written; a launch never fails over an extension. |
 
 `ZENDRIVER_MCP_GATEWAY=1` and `ZENDRIVER_MCP_PROFILE=gateway` are still accepted, and mean
 `SURFACE=catalog`.

@@ -6,10 +6,12 @@ import functools
 import logging
 import os
 import sys
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -89,6 +91,47 @@ async def _cdp_answers(host: str, port: int) -> bool:
             await writer.wait_closed()
         except Exception:  # a half-dead socket must not mask the verdict
             pass
+
+
+def _writable(path: Path) -> bool:
+    """Whether files can really be created in ``path`` (creating it if needed).
+
+    Tried, not inferred: os.access() does not see Landlock or read-only bind
+    mounts, so a sandboxed process can be told "writable" and then refused.
+    """
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=path):
+            pass
+        return True
+    except OSError:
+        return False
+
+
+def _extension_dirs() -> list[Path]:
+    """Candidate extension directories, preferred first."""
+    explicit = os.environ.get("ZENDRIVER_MCP_EXTENSIONS_DIR", "").strip()
+    if explicit:
+        return [Path(explicit).expanduser()]
+    xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
+    cache = (Path(xdg) if xdg else Path.home() / ".cache") / "zendriver-mcp" / "extensions"
+    return [cache, Path(tempfile.gettempdir()) / "zendriver-mcp-extensions"]
+
+
+def extensions_dir() -> Path:
+    """Where browser extensions are provisioned.
+
+    ``ZENDRIVER_MCP_EXTENSIONS_DIR`` when set (used as given). Otherwise the user
+    cache (``$XDG_CACHE_HOME`` or ``~/.cache``) under ``zendriver-mcp/extensions``,
+    or the temp dir when that cannot be written (a sandbox that leaves only /tmp
+    writable). Never the package directory: an installed wheel lives in
+    site-packages, which is not ours to write and often not writable at all.
+    """
+    candidates = _extension_dirs()
+    for d in candidates:
+        if _writable(d):
+            return d
+    return candidates[0]
 
 
 class BrowserSession:
@@ -329,23 +372,28 @@ class BrowserSession:
         """
         import json
         import shutil
-        import tempfile
         import urllib.request
         import zipfile
 
-        ext_root = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "extensions"
-        )
-        ext_dir = os.path.join(ext_root, spec["dir"])
-        if os.path.isfile(os.path.join(ext_dir, "manifest.json")):
-            return ext_dir
-        if os.path.isdir(ext_dir):
-            shutil.rmtree(ext_dir, ignore_errors=True)  # salvage a broken install
+        # An install anywhere we look is used as is, read-only: a sandbox that
+        # cannot write the cache can still load what was provisioned there.
+        for candidate in _extension_dirs():
+            found = candidate / spec["dir"]
+            if (found / "manifest.json").is_file():
+                return str(found)
 
-        os.makedirs(ext_root, exist_ok=True)
-        staging = tempfile.mkdtemp(prefix=spec["dir"] + ".", dir=ext_root)
-        zip_path = os.path.join(staging, "download.zip")
+        ext_root = str(extensions_dir())
+        ext_dir = os.path.join(ext_root, spec["dir"])
+
+        # Everything that writes is inside the try: a directory the process
+        # cannot write (a sandbox) must cost the extension, not the launch.
+        staging: str | None = None
         try:
+            if os.path.isdir(ext_dir):
+                shutil.rmtree(ext_dir, ignore_errors=True)  # salvage a broken install
+            os.makedirs(ext_root, exist_ok=True)
+            staging = tempfile.mkdtemp(prefix=spec["dir"] + ".", dir=ext_root)
+            zip_path = os.path.join(staging, "download.zip")
             api = "https://api.github.com/repos/%s/releases/latest" % spec["repo"]
             with urllib.request.urlopen(api, timeout=60) as r:
                 meta = json.loads(r.read())
@@ -377,7 +425,8 @@ class BrowserSession:
             )
             return None
         finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            if staging is not None:
+                shutil.rmtree(staging, ignore_errors=True)
 
     async def _load_extensions(self, ext_dirs: list[str]) -> None:
         """Install the provisioned extensions over CDP, after the browser is up.
