@@ -97,7 +97,10 @@ class BrowserSession:
     default_browser_path: str | None = None
     _instance: "BrowserSession | None" = None
     _browser: zd.Browser | None = None
-    _page: zd.Tab | None = None
+    # The active tab, per caller: on a shared HTTP server each token has its
+    # own (one client's new_tab or switch_tab must not move another's), and on
+    # stdio there is one caller, None. Read and written through `_page`.
+    _active: dict[str | None, zd.Tab] = {}
     _tabs: dict[str, zd.Tab] = {}
     _tab_owner: dict[str, str | None] = {}
     _tab_counter: int = 0
@@ -117,6 +120,7 @@ class BrowserSession:
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._tabs = {}
+            cls._active = {}
             cls._tab_owner = {}
             cls._network_logs = []
             cls._console_logs = []
@@ -236,7 +240,7 @@ class BrowserSession:
         clean, including the per-tool reset callbacks.
         """
         self._browser = None
-        self._page = None
+        self._forget_active()
         self._tabs = {}
         self._tab_owner = {}
         self._interceptors = {}
@@ -249,6 +253,25 @@ class BrowserSession:
         self._cdp_enabled_tabs = {}
         self._loaded_extensions = []
         self._run_reset_callbacks()
+
+    @property
+    def _page(self) -> zd.Tab | None:
+        return self._active.get(CALLER.get())
+
+    @_page.setter
+    def _page(self, value: zd.Tab | None) -> None:
+        if value is None:
+            self._active.pop(CALLER.get(), None)
+        else:
+            self._active[CALLER.get()] = value
+
+    def _forget_active(self, tab: zd.Tab | None = None) -> None:
+        """Drop every caller's active tab (all, or those pointing at ``tab``)."""
+        if tab is None:
+            self._active = {}
+            return
+        for caller in [c for c, t in self._active.items() if t is tab]:
+            del self._active[caller]
 
     @property
     def page(self) -> zd.Tab:
@@ -513,7 +536,7 @@ class BrowserSession:
         if self._browser is not None:
             await self._browser.stop()
             self._browser = None
-            self._page = None
+            self._forget_active()
             self._tabs = {}
             self._tab_owner = {}
             self._interceptors = {}
@@ -798,8 +821,7 @@ class BrowserSession:
             gone = self._tabs.pop(tid)
             self._tab_owner.pop(tid, None)
             _dom.forget(gone)
-            if self._page is gone:
-                self._page = None
+            self._forget_active(gone)
             self._tabs_changed()
         by_target = {getattr(t.target, "target_id", None): tid for tid, t in self._tabs.items()}
         for tab in live:
@@ -872,8 +894,11 @@ class BrowserSession:
         _dom.forget(tab)
         self._tabs_changed()
 
-        # If closed tab was current, switch to another this caller can see
-        if self._page is tab:
+        # If the closed tab was this caller's active one, move to another it can
+        # see; anyone else who had it active simply has none until they choose.
+        was_mine = self._page is tab
+        self._forget_active(tab)
+        if was_mine:
             visible = [t for tid, t in self._tabs.items() if self._visible(tid)]
             self._page = visible[0] if visible else None
 
