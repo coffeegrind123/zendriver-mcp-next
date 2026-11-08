@@ -72,6 +72,13 @@ async def _scenario() -> dict:
             )
             out["page"] = probe["value"] if "value" in probe else probe
 
+            # A slow promise: awaited within `timeout`, and past it the error says
+            # the script may still be running (it matters for scripts that click).
+            slow = "return await new Promise(r => setTimeout(() => r('done'), 1500))"
+            out["slow_ok"] = _sc(await c.call_tool("execute_js", {"script": slow, "timeout": 5}))
+            late = await c.call_tool("execute_js", {"script": slow, "timeout": 1})
+            out["slow_late"] = late.structured_content
+
             # Something covering the button must be named, not clicked through.
             await c.call_tool("execute_js", {"script": "cover.style.display='block'"})
             covered = await c.call_tool("click", {"selector": "#go"})
@@ -141,6 +148,10 @@ def test_live_end_to_end() -> None:
     assert page["zd"] == "undefined", "our id store leaked into the page's world"
     assert page["marked"] == 0
     assert not [e for e in log if e.startswith("attr:")], f"we mutated attributes: {log}"
+
+    assert out["slow_ok"]["value"] == "done"
+    assert out["slow_late"]["code"] == "timeout"
+    assert "still be running" in out["slow_late"]["hint"]
 
     assert out["covered"]["code"] == "element_obscured"
     assert "cover" in out["covered"]["error"]

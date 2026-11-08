@@ -17,11 +17,16 @@ from zendriver_mcp.errors import (
     ElementNotFoundError,
     InvalidArgumentError,
     StaleIdError,
+    ToolTimeoutError,
     ZendriverMCPError,
 )
 from zendriver_mcp.registry import Effect, Reach
 from zendriver_mcp.response import Artifact, Result
-from zendriver_mcp.tools.base import ToolBase
+from zendriver_mcp.tools.base import DEFAULT_TOOL_TIMEOUT, JS_TIMEOUT_SECONDS, ToolBase
+
+# execute_js may wait this long for a script, leaving the tool's own budget room
+# to report the timeout instead of being cut off by it.
+MAX_JS_TIMEOUT = max(JS_TIMEOUT_SECONDS, DEFAULT_TOOL_TIMEOUT - 5.0)
 
 # Cap the returned screenshot width; vision tokens scale with pixel area, so a
 # 1920px capture costs ~3.5x a 1024px one for no readability gain. Downscaling
@@ -220,6 +225,12 @@ class UtilityTools(ToolBase):
                 description="JavaScript to run in the page: an expression ('document.title'), or statements that end in a return ('const n = document.links.length; return n'). Promises are awaited. Example: 'return [...document.querySelectorAll(\"h2\")].map(h => h.textContent)'"
             ),
         ],
+        timeout: Annotated[
+            float,
+            Field(
+                description=f"Seconds to wait for the result, promises included, between 1 and {MAX_JS_TIMEOUT:.0f}. Raise it for scripts that poll or retry. Example: 45"
+            ),
+        ] = JS_TIMEOUT_SECONDS,
     ) -> JsResult:
         """Run JavaScript in the page's own context and return its value as JSON.
 
@@ -230,17 +241,35 @@ class UtilityTools(ToolBase):
         page's main world, so it sees the page's variables and the page could
         in principle observe it; prefer the dedicated tools where they apply.
         """
+        if not 1 <= timeout <= MAX_JS_TIMEOUT:
+            raise InvalidArgumentError(
+                f"timeout must be between 1 and {MAX_JS_TIMEOUT:.0f} seconds, got {timeout}."
+            )
         try:
-            value = await self.run_js(script, world=World.MAIN)
-        except ZendriverMCPError as e:
-            # "Illegal return statement" (or await outside async): the caller
-            # wrote a statement block. Run it as an async function body, which
-            # is what they meant, rather than making them wrap it.
-            text = str(e)
-            if "Illegal return" not in text and "await is only valid" not in text:
+            try:
+                value = await self.run_js(script, timeout=timeout, world=World.MAIN)
+            except ToolTimeoutError:
                 raise
-            body = "(async () => {\n" + script + "\n})()"
-            value = await self.run_js(body, world=World.MAIN)
+            except ZendriverMCPError as e:
+                # "Illegal return statement" (or await outside async): the caller
+                # wrote a statement block. Run it as an async function body, which
+                # is what they meant, rather than making them wrap it.
+                text = str(e)
+                if "Illegal return" not in text and "await is only valid" not in text:
+                    raise
+                body = "(async () => {\n" + script + "\n})()"
+                value = await self.run_js(body, timeout=timeout, world=World.MAIN)
+        except ToolTimeoutError as e:
+            # Not cancellable: CDP has no way to stop a running promise, so the
+            # script carries on in the page after we stop waiting. For a script
+            # that clicks or submits, running it again could repeat the action.
+            raise ZendriverMCPError(
+                f"The script did not finish within {timeout:g}s.",
+                code=Code.TIMEOUT,
+                hint="It may still be running in the page. If it has side effects (clicks, "
+                "submits, purchases), check the page state before running it again. Raise "
+                f"`timeout` (up to {MAX_JS_TIMEOUT:.0f}) for scripts that legitimately take longer.",
+            ) from e
         if value is None:
             return JsResult(summary="(no return value)", value=None, has_value=False)
         return JsResult(summary="JavaScript returned a value", value=value, has_value=True)
