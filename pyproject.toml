@@ -1,0 +1,67 @@
+[project]
+name = "zendriver-mcp"
+version = "0.4.0"
+description = "Undetectable browser automation MCP server for LLM agents, with a search gateway and 98 tools."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "zendriver>=0.14.0",
+    # Direct, not transitive-via-zendriver: src/launch.py constructs the
+    # Browser itself (the only way to watch the child process during startup)
+    # and so has to register the shutdown hook Browser.create would have.
+    "asyncio-atexit>=1.0",
+    # <2 is load-bearing, not caution: the SDK 2.0 release moved
+    # mcp.server.fastmcp, which every tool module imports, and renamed
+    # Tool.inputSchema. An unpinned install resolves 2.x and the server
+    # dies at import. Tested against 1.28.
+    "mcp>=1.9,<2",
+    "Pillow",
+]
+
+[project.scripts]
+zendriver-mcp = "src.server:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.7",
+    "mypy>=1.11",
+    "pytest>=8.0",
+]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "pymdown-extensions>=10.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",   # line-too-long (docstrings/Field descriptions are intentionally long)
+    "UP031",  # legacy %-formatting in the extension-provisioning code is fine
+]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
