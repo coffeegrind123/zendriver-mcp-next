@@ -16,17 +16,13 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
-          # This repo has no uv.lock, and the action's default cache key glob is
-          # **/uv.lock — "No matches found for glob" is a hard error, so every
-          # run since caching was turned on died before installing anything.
-          # Key the cache off the file that does declare the dependencies.
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --all-extras --dev
+        run: uv sync --locked --all-extras --dev
 
       - name: Ruff lint
         run: uv run ruff check .
@@ -55,13 +51,13 @@ jobs:
         uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
-          cache-dependency-glob: "pyproject.toml"
+          cache-dependency-glob: "uv.lock"
 
       - name: Set up Python
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --locked --dev
 
       - name: Install Xvfb
         run: sudo apt-get update && sudo apt-get install -y xvfb
