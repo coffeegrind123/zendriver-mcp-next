@@ -33,7 +33,7 @@ def _schema_bytes() -> tuple[int, int]:
     tools = asyncio.run(mcp.list_tools())
     blob = json.dumps(
         [
-            {"name": t.name, "description": t.description or "", "schema": t.inputSchema}
+            {"name": t.name, "description": t.description or "", "schema": t.input_schema}
             for t in tools
         ]
     )
@@ -58,7 +58,7 @@ def test_gateway_surface_stays_small() -> None:
         "import json,asyncio;"
         "from src.tools import mcp;"
         "tools=asyncio.run(mcp.list_tools());"
-        "blob=json.dumps([{'n':t.name,'d':t.description or '','s':t.inputSchema} for t in tools]);"
+        "blob=json.dumps([{'n':t.name,'d':t.description or '','s':t.input_schema} for t in tools]);"
         "print(len(tools), len(blob))"
     )
     env = dict(os.environ, ZENDRIVER_MCP_GATEWAY="1")

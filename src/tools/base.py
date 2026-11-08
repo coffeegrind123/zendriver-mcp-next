@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 from src.errors import (
     BrowserNotStartedError,
@@ -162,9 +162,7 @@ class ToolBase(ABC):
                 # Probing the endpoint is what tells "slow" from "gone".
                 if isinstance(err, ToolTimeoutError):
                     if await self._session.discard_if_unreachable():
-                        raise BrowserUnreachableError(
-                            name, budget, AUTOSTART_BROWSER
-                        ) from exc
+                        raise BrowserUnreachableError(name, budget, AUTOSTART_BROWSER) from exc
                 raise err from exc
             except BrowserNotStartedError:
                 # Retried once, and only once: if the browser still is not there

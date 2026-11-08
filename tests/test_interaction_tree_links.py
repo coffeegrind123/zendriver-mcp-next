@@ -72,5 +72,7 @@ def test_the_limit_still_applies_with_links_on() -> None:
 def test_a_non_dict_element_cannot_break_the_strip() -> None:
     # The walker is JS and validates nothing; a malformed entry must not throw
     # in the middle of returning a page.
-    out = asyncio.run(_tools([{"id": 1, "t": "link", "h": "/x"}, "junk", None]).get_interaction_tree())
+    out = asyncio.run(
+        _tools([{"id": 1, "t": "link", "h": "/x"}, "junk", None]).get_interaction_tree()
+    )
     assert '"h"' not in out

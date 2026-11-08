@@ -39,17 +39,20 @@ if __name__ == "__main__":
     if args.browser_path:
         BrowserSession.default_browser_path = args.browser_path
 
-    if args.transport != "stdio":
-        # Set on the instance rather than through FASTMCP_HOST / FASTMCP_PORT.
-        # Those env vars are documented by FastMCP but are NOT read in mcp SDK
-        # >= 1.28: FastMCP.__init__ passes its own keyword defaults straight to
-        # Settings, so the environment is bypassed. Measured 2026-08-16 — with
-        # FASTMCP_PORT=8931 exported, the server bound 8000 and said so.
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
-        mcp.settings.stateless_http = not args.stateful
-        # Plain JSON instead of an SSE frame per response: every HTTP client can
-        # read it, including curl and the stdlib.
-        mcp.settings.json_response = True
-
-    mcp.run(transport=args.transport)
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+    elif args.transport == "sse":
+        # The pre-2025-03-26 HTTP+SSE transport, kept for old clients only.
+        mcp.run(transport="sse", host=args.host, port=args.port)
+    else:
+        # Passed to run() rather than set on mcp.settings: SDK 2 moved the
+        # transport options off the server's settings and onto run()'s keywords.
+        mcp.run(
+            transport=args.transport,
+            host=args.host,
+            port=args.port,
+            stateless_http=not args.stateful,
+            # Plain JSON instead of an SSE frame per response: every HTTP client
+            # can read it, including curl and the stdlib.
+            json_response=True,
+        )

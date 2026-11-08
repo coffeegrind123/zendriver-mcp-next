@@ -19,7 +19,7 @@ import asyncio, json
 from src.errors import BrowserNotStartedError
 from src.session import BrowserSession
 from src.tools.base import ToolBase
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 starts = []
 session = BrowserSession.get_instance()
@@ -79,7 +79,7 @@ DEAD_HARNESS = """
 import asyncio, json
 from src.session import BrowserSession
 from src.tools.base import ToolBase
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 starts = []
 session = BrowserSession.get_instance()

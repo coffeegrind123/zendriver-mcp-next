@@ -133,26 +133,34 @@ def test_the_error_names_the_wedge_rather_than_the_clock() -> None:
 
 # --- pytest entry points (no pytest-asyncio in this repo) ---
 
+
 def test_a_live_endpoint_answers() -> None:
     asyncio.run(_test_a_live_endpoint_answers())
+
 
 def test_a_silent_endpoint_is_unreachable_not_merely_slow() -> None:
     asyncio.run(_test_a_silent_endpoint_is_unreachable_not_merely_slow())
 
+
 def test_a_refused_port_is_unreachable_too() -> None:
     asyncio.run(_test_a_refused_port_is_unreachable_too())
+
 
 def test_a_healthy_browser_is_not_discarded() -> None:
     asyncio.run(_test_a_healthy_browser_is_not_discarded())
 
+
 def test_a_stopped_browser_is_unreachable_without_probing() -> None:
     asyncio.run(_test_a_stopped_browser_is_unreachable_without_probing())
+
 
 def test_no_browser_is_not_unreachable() -> None:
     asyncio.run(_test_no_browser_is_not_unreachable())
 
+
 def test_an_unparseable_url_does_not_claim_the_browser_is_broken() -> None:
     asyncio.run(_test_an_unparseable_url_does_not_claim_the_browser_is_broken())
+
 
 def test_discard_clears_the_session_so_the_next_call_starts_clean() -> None:
     asyncio.run(_test_discard_clears_the_session_so_the_next_call_starts_clean())

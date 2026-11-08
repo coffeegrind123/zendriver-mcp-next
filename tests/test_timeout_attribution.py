@@ -1,4 +1,4 @@
-""""The tool was too slow" and "the thing it looked for was not there" are opposite.
+""" "The tool was too slow" and "the thing it looked for was not there" are opposite.
 
 They arrive as the same exception type. zendriver signals a MISS as a timeout —
 `find(text=...)` raises asyncio.TimeoutError("Timeout (10s) waiting for any

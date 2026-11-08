@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from zendriver import cdp
 
 from src.errors import AccessibilityUidError, ElementNotFoundError

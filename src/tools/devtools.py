@@ -11,7 +11,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 from zendriver import cdp
 
 from src.artifacts import resolve_artifact_path

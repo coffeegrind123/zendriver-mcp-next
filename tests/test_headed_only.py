@@ -30,7 +30,6 @@ from src.launch import (  # noqa: E402
 )
 from src.session import BrowserSession  # noqa: E402
 
-
 # --------------------------------------------------------------------------
 # the decision itself
 # --------------------------------------------------------------------------
@@ -116,7 +115,7 @@ def test_session_start_is_headed_by_default(monkeypatch: pytest.MonkeyPatch) -> 
 
 def _tools(monkeypatch: pytest.MonkeyPatch, module: str, cls: str):
     """Build a tool module against a session whose start() records and returns."""
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
     import src.tools.base as base
 
@@ -176,14 +175,14 @@ def test_the_proxy_restarts_carry_the_same_note(monkeypatch: pytest.MonkeyPatch)
 
 def test_the_start_browser_schema_does_not_advertise_headless() -> None:
     """A model reads the schema, not this file. It has to say "ignored" there."""
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
     import src.tools.browser as browser_module
 
     mcp = FastMCP("test")
     browser_module.BrowserTools(mcp)
     tool = next(t for t in asyncio.run(mcp.list_tools()) if t.name == "start_browser")
-    description = tool.inputSchema["properties"]["headless"]["description"]
+    description = tool.input_schema["properties"]["headless"]["description"]
     assert "IGNORED" in description
     assert "always launches headed" in description
 

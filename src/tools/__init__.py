@@ -2,7 +2,7 @@
 import os
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer as FastMCP
 
 from src.tools.accessibility import AccessibilityTools
 from src.tools.base import ToolBase

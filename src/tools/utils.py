@@ -6,7 +6,7 @@ import tempfile
 from datetime import datetime
 from typing import Annotated
 
-from mcp.server.fastmcp.utilities.types import Image
+from mcp.server.mcpserver import Image
 from PIL import Image as PILImage
 from pydantic import Field
 

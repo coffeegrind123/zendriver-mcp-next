@@ -9,7 +9,8 @@ import json
 import os
 from typing import Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver import MCPServer as FastMCP
 from pydantic import Field
 
 # Tools kept natively visible so the common browse loop (start -> navigate ->
@@ -180,6 +181,7 @@ def install_gateway(mcp: FastMCP, groups: "dict[str, list[str]]") -> None:
                 description='Arguments object for that tool, matching its schema. Pass {} for a no-argument tool. Example: {"url": "https://example.com"}'
             ),
         ] = {},  # noqa: B006
+        ctx: Context | None = None,
     ) -> Any:
         """Invoke any of this server's tools by name — the path to every hidden capability.
 
@@ -192,7 +194,9 @@ def install_gateway(mcp: FastMCP, groups: "dict[str, list[str]]") -> None:
         if tool is None:
             return f"Unknown tool: {name}. Use search_tools to find the right name."
         try:
-            return await tool.run(arguments or {})
+            return await tool.run(
+                arguments or {}, ctx if ctx is not None else Context(mcp_server=mcp)
+            )
         except Exception as e:  # surface validation / runtime faults as text
             return f"Error calling {name}: {type(e).__name__}: {e}"
 
