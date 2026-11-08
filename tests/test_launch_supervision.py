@@ -27,8 +27,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src import launch as L  # noqa: E402
-from src.errors import BrowserLaunchError  # noqa: E402
+from zendriver_mcp import launch as L  # noqa: E402
+from zendriver_mcp.errors import BrowserLaunchError  # noqa: E402
 
 # Chrome's actual words on a dead display, kept verbatim -- these strings are
 # what the diagnosis matches on, so a paraphrase would not test anything.

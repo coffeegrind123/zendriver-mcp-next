@@ -14,11 +14,11 @@ import pytest
 from mcp import Client
 from mcp.server.mcpserver import MCPServer
 
-from src.tools.emulation import EmulationTools
-from src.tools.permissions import PermissionsTools
-from src.tools.proxy import ProxyTools
-from src.tools.stealth import StealthTools
-from src.tools.utils import UtilityTools
+from zendriver_mcp.tools.emulation import EmulationTools
+from zendriver_mcp.tools.permissions import PermissionsTools
+from zendriver_mcp.tools.proxy import ProxyTools
+from zendriver_mcp.tools.stealth import StealthTools
+from zendriver_mcp.tools.utils import UtilityTools
 
 MODULES = (UtilityTools, StealthTools, EmulationTools, PermissionsTools, ProxyTools)
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from src.tools.content import ContentTools
+from zendriver_mcp.tools.content import ContentTools
 
 
 def _tools(js_result: Any, text: Any = "") -> ContentTools:

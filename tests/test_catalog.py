@@ -11,16 +11,14 @@ import sys
 import pytest
 from mcp import Client
 
-from src.tools import CATALOG, mcp
-from src.tools.catalog import CORE, META, resolve_refs
+from zendriver_mcp.tools import CATALOG, mcp
+from zendriver_mcp.tools.catalog import CORE, META, resolve_refs
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def _listed(env: dict[str, str]) -> list[str]:
-    code = (
-        "import json;from src.tools import mcp;print(json.dumps(sorted(mcp._tool_manager._tools)))"
-    )
+    code = "import json;from zendriver_mcp.tools import mcp;print(json.dumps(sorted(mcp._tool_manager._tools)))"
     full_env = {k: v for k, v in os.environ.items() if not k.startswith("ZENDRIVER_MCP_")}
     full_env.update(env)
     out = subprocess.check_output([sys.executable, "-c", code], env=full_env, cwd=ROOT)
@@ -127,7 +125,7 @@ def test_refs_resolve_whole_and_inline() -> None:
 
 
 def test_refs_to_missing_fields_or_future_steps_fail_clearly() -> None:
-    from src.errors import InvalidArgumentError
+    from zendriver_mcp.errors import InvalidArgumentError
 
     with pytest.raises(InvalidArgumentError, match="no 'nope'"):
         resolve_refs("$0.nope", [{"a": 1}])

@@ -24,8 +24,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
-from src.errors import BrowserUnreachableError
-from src.session import BrowserSession, _cdp_answers
+from zendriver_mcp.errors import BrowserUnreachableError
+from zendriver_mcp.session import BrowserSession, _cdp_answers
 
 
 class _FakeBrowser:

@@ -16,10 +16,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Registers one tool through ToolBase._register, then calls it on a cold session.
 HARNESS = """
 import asyncio, json
-from src.session import BrowserSession
-from src.tools.base import ToolBase
-from src.registry import Effect
-from src.response import Result
+from zendriver_mcp.session import BrowserSession
+from zendriver_mcp.tools.base import ToolBase
+from zendriver_mcp.registry import Effect
+from zendriver_mcp.response import Result
 from mcp.server.mcpserver import MCPServer as FastMCP
 
 def unwrap(res):
@@ -82,10 +82,10 @@ def test_enabled_starts_the_browser_once_and_retries() -> None:
 
 DEAD_HARNESS = """
 import asyncio, json
-from src.session import BrowserSession
-from src.tools.base import ToolBase
-from src.registry import Effect
-from src.response import Result
+from zendriver_mcp.session import BrowserSession
+from zendriver_mcp.tools.base import ToolBase
+from zendriver_mcp.registry import Effect
+from zendriver_mcp.response import Result
 from mcp.server.mcpserver import MCPServer as FastMCP
 
 def unwrap(res):

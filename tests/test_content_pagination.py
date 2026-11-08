@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.tools.content import ContentTools
+from zendriver_mcp.tools.content import ContentTools
 
 
 def test_first_slice_reports_next_offset() -> None:

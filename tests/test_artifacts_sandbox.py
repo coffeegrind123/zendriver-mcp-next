@@ -1,4 +1,4 @@
-"""Path-sandbox tests for ``src.artifacts.resolve_artifact_path``."""
+"""Path-sandbox tests for ``zendriver_mcp.artifacts.resolve_artifact_path``."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from src.artifacts import resolve_artifact_path
-from src.errors import ZendriverMCPError
+from zendriver_mcp.artifacts import resolve_artifact_path
+from zendriver_mcp.errors import ZendriverMCPError
 
 
 def test_empty_path_generates_timestamped_tempfile() -> None:

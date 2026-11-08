@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from zendriver import cdp
 
-from src.tools.permissions import _COMMON_PERMISSIONS
+from zendriver_mcp.tools.permissions import _COMMON_PERMISSIONS
 
 
 def test_common_permissions_are_real_enum_members() -> None:

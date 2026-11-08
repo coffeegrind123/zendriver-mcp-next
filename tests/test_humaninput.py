@@ -6,7 +6,7 @@ import math
 import random
 import statistics
 
-from src.humaninput import Point, bezier_path, keystroke_delays
+from zendriver_mcp.humaninput import Point, bezier_path, keystroke_delays
 
 
 def test_bezier_path_endpoints_match() -> None:

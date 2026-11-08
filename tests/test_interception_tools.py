@@ -14,9 +14,9 @@ import pytest
 from mcp.server.mcpserver import MCPServer
 from zendriver import cdp
 
-from src.errors import ZendriverMCPError
-from src.session import CALL_TAB, BrowserSession
-from src.tools.interception import InterceptionTools
+from zendriver_mcp.errors import ZendriverMCPError
+from zendriver_mcp.session import CALL_TAB, BrowserSession
+from zendriver_mcp.tools.interception import InterceptionTools
 
 
 class _Tab:

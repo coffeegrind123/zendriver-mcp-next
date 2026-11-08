@@ -22,13 +22,13 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.errors import BrowserLaunchError  # noqa: E402
-from src.launch import (  # noqa: E402
+from zendriver_mcp.errors import BrowserLaunchError  # noqa: E402
+from zendriver_mcp.launch import (  # noqa: E402
     HEADED_ONLY_NOTE,
     preflight_display,
     resolve_headless,
 )
-from src.session import BrowserSession  # noqa: E402
+from zendriver_mcp.session import BrowserSession  # noqa: E402
 
 # --------------------------------------------------------------------------
 # the decision itself
@@ -68,7 +68,7 @@ class _FakeBrowser:
 
 def _launch_headless(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> object:
     """Run ``BrowserSession.start`` against a fake launcher, return the zd.Config."""
-    import src.session as S
+    import zendriver_mcp.session as S
 
     captured: dict[str, object] = {}
 
@@ -117,7 +117,7 @@ def _tools(monkeypatch: pytest.MonkeyPatch, module: str, cls: str):
     """Build a tool module against a session whose start() records and returns."""
     from mcp.server.mcpserver import MCPServer as FastMCP
 
-    import src.tools.base as base
+    import zendriver_mcp.tools.base as base
 
     calls: list[dict] = []
 
@@ -142,7 +142,7 @@ def _tools(monkeypatch: pytest.MonkeyPatch, module: str, cls: str):
 def test_start_browser_reports_headed_and_names_the_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tools, calls = _tools(monkeypatch, "src.tools.browser", "BrowserTools")
+    tools, calls = _tools(monkeypatch, "zendriver_mcp.tools.browser", "BrowserTools")
 
     message = asyncio.run(tools.start_browser(headless=True)).summary
 
@@ -157,13 +157,13 @@ def test_start_browser_reports_headed_and_names_the_override(
 def test_start_browser_says_nothing_extra_when_headed_was_asked_for(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    tools, _ = _tools(monkeypatch, "src.tools.browser", "BrowserTools")
+    tools, _ = _tools(monkeypatch, "zendriver_mcp.tools.browser", "BrowserTools")
     message = asyncio.run(tools.start_browser()).summary
     assert message == "Browser started in headed mode"
 
 
 def test_the_proxy_restarts_carry_the_same_note(monkeypatch: pytest.MonkeyPatch) -> None:
-    tools, _ = _tools(monkeypatch, "src.tools.proxy", "ProxyTools")
+    tools, _ = _tools(monkeypatch, "zendriver_mcp.tools.proxy", "ProxyTools")
 
     configured = asyncio.run(tools.configure_proxy("http://10.0.0.1:8080", headless=True))
     cleared = asyncio.run(tools.clear_proxy(headless=True))
@@ -175,7 +175,7 @@ def test_the_proxy_restarts_carry_the_same_note(monkeypatch: pytest.MonkeyPatch)
 
 
 def test_the_proxy_password_is_not_echoed(monkeypatch: pytest.MonkeyPatch) -> None:
-    tools, calls = _tools(monkeypatch, "src.tools.proxy", "ProxyTools")
+    tools, calls = _tools(monkeypatch, "zendriver_mcp.tools.proxy", "ProxyTools")
     result = asyncio.run(tools.configure_proxy("http://bob:s3cret@10.0.0.1:8080"))
     assert "s3cret" not in result.summary and "s3cret" not in (result.proxy or "")
     assert calls[0]["proxy"] == "http://bob:s3cret@10.0.0.1:8080", (
@@ -187,7 +187,7 @@ def test_the_start_browser_schema_does_not_advertise_headless() -> None:
     """A model reads the schema, not this file. It has to say "ignored" there."""
     from mcp.server.mcpserver import MCPServer as FastMCP
 
-    import src.tools.browser as browser_module
+    import zendriver_mcp.tools.browser as browser_module
 
     mcp = FastMCP("test")
     browser_module.BrowserTools(mcp)
@@ -204,7 +204,7 @@ def test_the_start_browser_schema_does_not_advertise_headless() -> None:
 
 def test_no_failure_path_offers_headless_as_the_fix(monkeypatch: pytest.MonkeyPatch) -> None:
     """Telling a caller to pass a flag that is ignored is worse than telling it nothing."""
-    from src.launch import diagnose
+    from zendriver_mcp.launch import diagnose
 
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.delenv("ZENDRIVER_MCP_SKIP_DISPLAY_CHECK", raising=False)

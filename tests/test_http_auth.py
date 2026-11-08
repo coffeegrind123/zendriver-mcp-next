@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from src.http_auth import AuthMiddleware, TokenStore, is_loopback, transport_security
-from src.session import CALLER
+from zendriver_mcp.http_auth import AuthMiddleware, TokenStore, is_loopback, transport_security
+from zendriver_mcp.session import CALLER
 
 
 def test_tokens_are_stored_hashed_and_identify(tmp_path: Path) -> None:
@@ -88,7 +88,7 @@ def test_host_lists_cover_loopback_and_extras() -> None:
 
 
 def test_server_refuses_public_bind_without_tokens(tmp_path: Path, monkeypatch) -> None:
-    from src.server import main
+    from zendriver_mcp.server import main
 
     monkeypatch.setenv("ZENDRIVER_MCP_CONFIG_DIR", str(tmp_path))
     assert main(["--transport", "streamable-http", "--host", "0.0.0.0"]) == 2

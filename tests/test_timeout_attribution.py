@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import asyncio
 
-from src.errors import ToolTimeoutError, ZendriverMCPError
-from src.tools.base import _timeout_error
+from zendriver_mcp.errors import ToolTimeoutError, ZendriverMCPError
+from zendriver_mcp.tools.base import _timeout_error
 
 
 def test_an_inner_timeout_keeps_its_own_message() -> None:

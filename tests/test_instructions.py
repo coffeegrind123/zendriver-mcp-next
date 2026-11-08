@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import re
 
-from src.instructions import INSTRUCTIONS
-from src.tools import CATALOG
-from src.tools.catalog import META
+from zendriver_mcp.instructions import INSTRUCTIONS
+from zendriver_mcp.tools import CATALOG
+from zendriver_mcp.tools.catalog import META
 
 # Claude Code truncates instructions at 4,096 characters; keep headroom.
 LIMIT = 3500
@@ -26,6 +26,6 @@ def test_every_tool_named_exists() -> None:
 
 
 def test_the_server_sends_them() -> None:
-    from src.tools import mcp
+    from zendriver_mcp.tools import mcp
 
     assert mcp.instructions == INSTRUCTIONS

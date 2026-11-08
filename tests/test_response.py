@@ -1,4 +1,4 @@
-"""Tests for the tool result models and the error conversion (src/response.py)."""
+"""Tests for the tool result models and the error conversion (zendriver_mcp/response.py)."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from pathlib import Path
 
 from pydantic import Field
 
-from src.errors import Code, ElementNotFoundError, InvalidArgumentError
-from src.response import Artifact, FileResult, Result, error_result, structured_of
+from zendriver_mcp.errors import Code, ElementNotFoundError, InvalidArgumentError
+from zendriver_mcp.response import Artifact, FileResult, Result, error_result, structured_of
 
 
 class Counted(Result):

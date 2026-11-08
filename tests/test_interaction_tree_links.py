@@ -17,7 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from src.tools.content import ContentTools
+from zendriver_mcp.tools.content import ContentTools
 
 
 def _tools(tree):

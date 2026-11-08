@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-zendriver-mcp = "src.server:main"
+zendriver-mcp = "zendriver_mcp.server:main"
 
 [dependency-groups]
 dev = [
@@ -33,7 +33,7 @@ docs = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["zendriver_mcp"]
 
 [build-system]
 requires = ["hatchling"]

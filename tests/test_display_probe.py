@@ -25,8 +25,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.errors import BrowserLaunchError  # noqa: E402
-from src.launch import preflight_display, x_display_reachable  # noqa: E402
+from zendriver_mcp.errors import BrowserLaunchError  # noqa: E402
+from zendriver_mcp.launch import preflight_display, x_display_reachable  # noqa: E402
 
 X11_DIR = "/tmp/.X11-unix"
 
@@ -210,7 +210,7 @@ def test_preflight_refuses_a_headed_launch_into_a_dead_display(
     assert ":4242" in message, "the caller must be told which display was checked"
     assert "Xvfb" in message, "the way out has to be named"
     # There used to be a second way out — "or call start_browser with
-    # headless=true". Headless is now redirected to headed (src/launch.py), so
+    # headless=true". Headless is now redirected to headed (zendriver_mcp/launch.py), so
     # offering it would send the caller to a flag that is ignored.
     assert "headless=true" not in message
 
@@ -240,7 +240,7 @@ def test_a_headless_request_cannot_skip_the_display_check(
     """
     import inspect
 
-    from src.launch import resolve_headless
+    from zendriver_mcp.launch import resolve_headless
 
     assert "headless" not in inspect.signature(preflight_display).parameters
     assert resolve_headless(True) is False

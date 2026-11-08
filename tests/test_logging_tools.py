@@ -13,8 +13,8 @@ import pytest
 from mcp import Client
 from mcp.server.mcpserver import MCPServer
 
-from src.session import CALL_TAB, BrowserSession
-from src.tools.logging import LoggingTools
+from zendriver_mcp.session import CALL_TAB, BrowserSession
+from zendriver_mcp.tools.logging import LoggingTools
 
 
 class _Tab:

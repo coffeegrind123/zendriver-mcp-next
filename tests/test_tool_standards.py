@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 from mcp import Client
 
-from src.registry import SPECS, Effect
-from src.tools import CATALOG
+from zendriver_mcp.registry import SPECS, Effect
+from zendriver_mcp.tools import CATALOG
 
 TOOLS = sorted(CATALOG)
 
@@ -39,7 +39,7 @@ def test_tool_is_complete(name: str) -> None:
 def test_no_tool_returns_an_error_string() -> None:
     """A failure returned as text looks like success to every client."""
     offenders = []
-    for path in sorted(Path("src/tools").glob("*.py")):
+    for path in sorted(Path("zendriver_mcp/tools").glob("*.py")):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.Return) and isinstance(
@@ -52,9 +52,9 @@ def test_no_tool_returns_an_error_string() -> None:
 
 
 def test_no_selector_is_interpolated_into_javascript() -> None:
-    """Element access goes through src/dom.py, never an f-string with a selector."""
+    """Element access goes through zendriver_mcp/dom.py, never an f-string with a selector."""
     offenders = []
-    for path in sorted(Path("src/tools").glob("*.py")):
+    for path in sorted(Path("zendriver_mcp/tools").glob("*.py")):
         for i, line in enumerate(path.read_text().splitlines(), 1):
             if "querySelector" in line and ("{safe" in line or "{selector" in line):
                 offenders.append(f"{path}:{i}: {line.strip()[:80]}")
@@ -64,7 +64,7 @@ def test_no_selector_is_interpolated_into_javascript() -> None:
 def test_no_dom_marker_attribute_anywhere() -> None:
     hits = [
         str(p)
-        for p in Path("src").rglob("*")
+        for p in Path("zendriver_mcp").rglob("*")
         if p.is_file() and p.suffix in {".py", ".js"} and "data-zendriver-id" in p.read_text()
     ]
     assert not hits, hits
@@ -77,7 +77,7 @@ def test_page_tools_take_a_tab_and_browser_tools_do_not() -> None:
 
 
 def test_every_listed_tool_round_trips_over_both_protocols() -> None:
-    from src.tools import mcp
+    from zendriver_mcp.tools import mcp
 
     async def run(mode: str) -> set[str]:
         async with Client(mcp, mode=mode) as c:

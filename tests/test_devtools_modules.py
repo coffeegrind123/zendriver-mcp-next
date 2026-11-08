@@ -14,10 +14,10 @@ import shutil
 from mcp import Client
 from mcp.server.mcpserver import MCPServer
 
-from src.tools.accessibility import AccessibilityTools
-from src.tools.devtools import DevToolsTools
-from src.tools.lighthouse import LighthouseTools
-from src.tools.screencast import ScreencastTools
+from zendriver_mcp.tools.accessibility import AccessibilityTools
+from zendriver_mcp.tools.devtools import DevToolsTools
+from zendriver_mcp.tools.lighthouse import LighthouseTools
+from zendriver_mcp.tools.screencast import ScreencastTools
 
 MODULES = (AccessibilityTools, DevToolsTools, LighthouseTools, ScreencastTools)
 

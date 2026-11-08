@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.tools.emulation import DEVICE_PROFILES, NETWORK_PROFILES
+from zendriver_mcp.tools.emulation import DEVICE_PROFILES, NETWORK_PROFILES
 
 
 def test_device_profiles_have_sensible_dimensions() -> None:

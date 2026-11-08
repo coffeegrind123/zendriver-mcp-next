@@ -14,7 +14,7 @@ import asyncio
 import pytest
 from mcp import Client
 
-from src.tools import mcp
+from zendriver_mcp.tools import mcp
 
 MODES = ["legacy", "2026-07-28"]
 

@@ -14,8 +14,8 @@ import asyncio
 
 import pytest
 
-from src.errors import ToolTimeoutError
-from src.tools.base import JS_TIMEOUT_SECONDS, ToolBase
+from zendriver_mcp.errors import ToolTimeoutError
+from zendriver_mcp.tools.base import JS_TIMEOUT_SECONDS, ToolBase
 
 
 class _HungPage:
@@ -106,7 +106,7 @@ def test_an_ordinary_evaluation_runs_in_the_isolated_world() -> None:
 
 
 def test_main_world_is_opt_in() -> None:
-    from src.dom import World
+    from zendriver_mcp.dom import World
 
     page = _FastPage()
     assert asyncio.run(_tools(page).run_js("window.x", world=World.MAIN)) == "ok"

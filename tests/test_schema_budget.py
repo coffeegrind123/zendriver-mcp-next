@@ -26,7 +26,7 @@ FULL_BUDGET_BYTES = 105_000
 FULL_OUTPUT_BUDGET_BYTES = 82_000
 
 _MEASURE = (
-    "import json,asyncio;from src.tools import mcp;t=asyncio.run(mcp.list_tools());"
+    "import json,asyncio;from zendriver_mcp.tools import mcp;t=asyncio.run(mcp.list_tools());"
     "print(json.dumps([len(t),"
     "len(json.dumps([{'n':x.name,'d':x.description or '','i':x.input_schema} for x in t])),"
     "len(json.dumps([x.output_schema for x in t]))]))"

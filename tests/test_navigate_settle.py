@@ -29,8 +29,8 @@ import asyncio
 import time
 from typing import Any
 
-from src.session import BrowserSession
-from src.tools.navigation import NavigationTools
+from zendriver_mcp.session import BrowserSession
+from zendriver_mcp.tools.navigation import NavigationTools
 
 
 class _FakePage:

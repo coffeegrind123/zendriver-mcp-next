@@ -46,7 +46,7 @@ def _sc(r):
 
 
 async def _scenario() -> dict:
-    from src.tools import mcp
+    from zendriver_mcp.tools import mcp
 
     out: dict = {}
     async with Client(mcp, mode="2026-07-28") as c:
