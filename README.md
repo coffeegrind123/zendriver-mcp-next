@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/coffeegrind123/zendriver-mcp-next/actions/workflows/ci.yml/badge.svg)](https://github.com/coffeegrind123/zendriver-mcp-next/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 ![MCP](https://img.shields.io/badge/MCP-2026--07--28%20%7C%202025--11--25-6f42c1)
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server that gives an AI agent
@@ -32,6 +33,7 @@ cannot tell an agent is there.
 - [Architecture](#architecture)
 - [Development](#development)
 - [Acknowledgements](#acknowledgements)
+- [License](#license)
 
 ## Quick start
 
@@ -258,3 +260,7 @@ Built on [zendriver](https://github.com/cdpdriver/zendriver) and the
 from [Zendriver-MCP](https://github.com/ShubhamChoulkar/Zendriver-MCP) by Shubham Choulkar;
 the MCP layer, element access, error model, HTTP security and test suite were rewritten for
 this project.
+
+## License
+
+[MIT](LICENSE)
