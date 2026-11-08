@@ -93,6 +93,10 @@ async def _cdp_answers(host: str, port: int) -> bool:
             pass
 
 
+# A directory name Chrome reserves inside an unpacked extension (see _ensure_extension).
+RESERVED_EXTENSION_DIR = "_metadata"
+
+
 def _writable(path: Path) -> bool:
     """Whether files can really be created in ``path`` (creating it if needed).
 
@@ -377,10 +381,43 @@ class BrowserSession:
 
         # An install anywhere we look is used as is, read-only: a sandbox that
         # cannot write the cache can still load what was provisioned there.
-        for candidate in _extension_dirs():
-            found = candidate / spec["dir"]
-            if (found / "manifest.json").is_file():
+        # Chrome writes indexed rulesets INTO an unpacked extension's directory
+        # (declarativeNetRequest), so the copy it loads must be writable. Use a
+        # writable install where there is one; otherwise copy a read-only one
+        # (a sandbox's view of the cache) to the writable candidate.
+        installed = [
+            c / spec["dir"]
+            for c in _extension_dirs()
+            if (c / spec["dir"] / "manifest.json").is_file()
+        ]
+        for found in installed:
+            if _writable(found):
+                # Installs from before _metadata was stripped: fix them now.
+                shutil.rmtree(found / RESERVED_EXTENSION_DIR, ignore_errors=True)
                 return str(found)
+        if installed:
+            target = extensions_dir() / spec["dir"]
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                staging_copy = Path(tempfile.mkdtemp(prefix=spec["dir"] + ".", dir=target.parent))
+                shutil.copytree(
+                    installed[0],
+                    staging_copy / "x",
+                    ignore=shutil.ignore_patterns(RESERVED_EXTENSION_DIR),
+                )
+                if target.exists():  # a broken leftover (no manifest): replace it
+                    shutil.rmtree(target, ignore_errors=True)
+                os.rename(staging_copy / "x", target)
+                shutil.rmtree(staging_copy, ignore_errors=True)
+                return str(target)
+            except OSError as e:
+                print(
+                    "[zendriver-mcp] extension '%s' is installed read-only at %s and could "
+                    "not be copied somewhere writable: %r" % (spec["dir"], installed[0], e),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                return None
 
         ext_root = str(extensions_dir())
         ext_dir = os.path.join(ext_root, spec["dir"])
@@ -408,6 +445,12 @@ class BrowserSession:
             os.remove(zip_path)
 
             src = staging if spec["wrapper"] is None else os.path.join(staging, spec["wrapper"])
+            # Web Store packaging leaves a `_metadata` dir (signed hashes). Chrome
+            # reserves names starting with "_" and refuses an unpacked extension
+            # holding one unless it can delete it first, which a read-only copy
+            # (a sandbox) cannot: "Cannot load extension with file or directory
+            # name _metadata". Unpacked loads never verify it, so drop it now.
+            shutil.rmtree(os.path.join(src, RESERVED_EXTENSION_DIR), ignore_errors=True)
             if not os.path.isfile(os.path.join(src, "manifest.json")):
                 raise RuntimeError(
                     "%s: no manifest.json under %s (asset layout changed?)" % (spec["dir"], src)

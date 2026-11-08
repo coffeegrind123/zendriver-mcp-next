@@ -14,6 +14,9 @@ All notable changes to this project are documented here. The format follows
 - An extensions directory that could not be written (a sandbox, or a wheel installed in
   site-packages) failed the whole browser launch. Extensions now live in the user cache,
   fall back to the temp dir, and are loaded read-only when already installed.
+- Inside a read-only sandbox the extensions still failed to load: Chrome needs to write
+  into an unpacked extension (indexed rulesets) and refuses one holding `_metadata`.
+  Provisioning strips `_metadata`, and a read-only install is copied somewhere writable.
 - Tests that stood up a silent endpoint took a minute each on Python 3.12.
 
 ## [0.5.0] - 2026-11-08
