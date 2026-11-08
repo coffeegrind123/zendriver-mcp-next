@@ -36,10 +36,28 @@ class _FakeBrowser:
 
 @contextlib.asynccontextmanager
 async def _server(handler):
-    srv = await asyncio.start_server(handler, "127.0.0.1", 0)
+    # Python >= 3.12.1 makes leaving `async with srv` wait for every connection
+    # handler to finish, and _silent sleeps for a minute by design. Close the
+    # connections ourselves on exit, or each silent-endpoint test takes 60s.
+    writers: set[asyncio.StreamWriter] = set()
+
+    async def tracked(reader, writer):
+        writers.add(writer)
+        try:
+            await handler(reader, writer)
+        except (asyncio.CancelledError, ConnectionError):
+            pass
+
+    srv = await asyncio.start_server(tracked, "127.0.0.1", 0)
     port = srv.sockets[0].getsockname()[1]
-    async with srv:
-        yield port
+    try:
+        async with srv:
+            yield port
+            for w in writers:
+                w.close()
+    finally:
+        for w in writers:
+            w.close()
 
 
 async def _answering(reader, writer):
