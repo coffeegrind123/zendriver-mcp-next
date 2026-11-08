@@ -144,7 +144,7 @@ def test_counter_does_not_saturate_past_the_log_limit() -> None:
 
 def test_navigate_settles_and_says_so() -> None:
     session = _FakeSession(per_tick=2, ticks=1)
-    out = asyncio.run(_make(session).navigate("https://example.com/news", settle=5))
+    out = asyncio.run(_make(session).navigate("https://example.com/news", settle=5)).summary
     assert session.navigated == ["https://example.com/news"]
     assert "Navigated to https://example.com/news" in out
     assert "network idle after" in out
@@ -153,13 +153,13 @@ def test_navigate_settles_and_says_so() -> None:
 
 def test_navigate_reports_an_unsettled_page_rather_than_pretending() -> None:
     session = _FakeSession(per_tick=1, ticks=None)
-    out = asyncio.run(_make(session).navigate("https://example.com/live", settle=0.3))
+    out = asyncio.run(_make(session).navigate("https://example.com/live", settle=0.3)).summary
     assert "network still active after" in out
 
 
 def test_settle_zero_skips_the_wait_entirely() -> None:
     session = _FakeSession(per_tick=1, ticks=None)
-    out = asyncio.run(_make(session).navigate("https://example.com", settle=0))
+    out = asyncio.run(_make(session).navigate("https://example.com", settle=0)).summary
     assert out == "Navigated to https://example.com (no settle requested)"
     assert session.page.waits == 0, "settle=0 must not sleep at all"
 
@@ -185,7 +185,7 @@ def test_document_readiness_is_awaited_before_the_idle_wait() -> None:
     network happens to look.
     """
     session = _FakeSession(per_tick=0, ticks=0, ready_after=3)
-    out = asyncio.run(_make(session).navigate("https://example.com/slow", settle=5))
+    out = asyncio.run(_make(session).navigate("https://example.com/slow", settle=5)).summary
     # The document became ready, so the settle is honest about having waited.
     assert "network idle after" in out
     assert session.page._ready_polls > 3, "readyState must actually have been polled"
@@ -193,7 +193,7 @@ def test_document_readiness_is_awaited_before_the_idle_wait() -> None:
 
 def test_a_document_that_never_becomes_ready_is_reported_not_claimed_settled() -> None:
     session = _FakeSession(per_tick=0, ticks=0, ready_after=None)
-    out = asyncio.run(_make(session).navigate("https://example.com/hang", settle=0.3))
+    out = asyncio.run(_make(session).navigate("https://example.com/hang", settle=0.3)).summary
     assert "document still loading" in out
     assert "network idle" not in out, "an unready document must never read as settled"
 

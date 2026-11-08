@@ -1,9 +1,12 @@
 (function () {
-  const ATTR = "data-zendriver-id";
-  let id = 1;
-
-  // Cleanup
-  document.querySelectorAll(`[${ATTR}]`).forEach(e => e.removeAttribute(ATTR));
+  // Runs in an ISOLATED world (src/dom.py), never the page's. Ids are kept in
+  // that world's globalThis.__zd store, not written into the DOM: a
+  // data-* attribute on every element is readable by any page script.
+  // Ids are stable for an element's life, so one from an earlier walk still
+  // works while its element exists, and a number is never reused.
+  const S = globalThis.__zd;
+  if (!S) throw new Error("element store missing: run via src/dom.py");
+  S.prune();
 
   const vh = window.innerHeight, vw = window.innerWidth;
 
@@ -167,8 +170,7 @@
         // Skip unlabeled generic elements
         if (!label && t === "el") { n = w.nextNode(); continue; }
 
-        const i = id++;
-        n.setAttribute(ATTR, i);
+        const i = S.idOf(n);
         seen.add(n);
 
         const o = { id: i, t: t, l: label || `[${n.tagName.toLowerCase()}]`, r: rgn(n) };

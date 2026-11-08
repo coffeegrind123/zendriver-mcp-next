@@ -39,7 +39,7 @@ def _tools(js_result: Any, text: Any = "") -> ContentTools:
 
 def test_non_empty_text_is_returned_untouched_and_costs_no_extra_probe() -> None:
     tools = _tools({}, text="hello world")
-    out = asyncio.run(tools.get_text_content(max_chars=100, offset=0))
+    out = asyncio.run(tools.get_text_content(max_chars=100, offset=0)).render()
     assert out == "[chars 0-11 of 11]\nhello world"
     assert len(tools._calls) == 1, "the diagnostic must not run on the happy path"
 
@@ -53,7 +53,7 @@ def test_still_loading_says_so_and_names_the_fix() -> None:
             "htmlChars": 500,
         }
     )
-    out = asyncio.run(tools.get_text_content())
+    out = asyncio.run(tools.get_text_content()).render()
     assert out.startswith("[chars 0-0 of 0]")
     assert "still loading" in out
     assert "readyState=loading" in out
@@ -65,7 +65,7 @@ def test_markup_present_but_no_text_points_at_iframes_and_shadow_roots() -> None
     tools = _tools(
         {"readyState": "complete", "url": "https://x.test/", "hasBody": True, "htmlChars": 90_000}
     )
-    out = asyncio.run(tools.get_text_content())
+    out = asyncio.run(tools.get_text_content()).render()
     assert "has markup" in out
     assert "iframe" in out
     assert "get_content" in out
@@ -75,7 +75,7 @@ def test_a_genuinely_blank_page_is_reported_as_blank() -> None:
     tools = _tools(
         {"readyState": "complete", "url": "https://x.test/", "hasBody": True, "htmlChars": 120}
     )
-    out = asyncio.run(tools.get_text_content())
+    out = asyncio.run(tools.get_text_content()).render()
     assert "really is blank" in out
 
 
@@ -83,13 +83,13 @@ def test_missing_body_is_its_own_answer() -> None:
     tools = _tools(
         {"readyState": "complete", "url": "https://x.test/", "hasBody": False, "htmlChars": 300}
     )
-    out = asyncio.run(tools.get_text_content())
+    out = asyncio.run(tools.get_text_content()).render()
     assert "no body element" in out
 
 
 def test_a_failing_diagnostic_never_replaces_the_result_with_an_error() -> None:
     tools = _tools(RuntimeError("target closed"))
-    out = asyncio.run(tools.get_text_content())
+    out = asyncio.run(tools.get_text_content()).render()
     assert out.startswith("[chars 0-0 of 0]"), "the pagination contract must survive"
     assert "could not diagnose" in out
     assert "target closed" in out
@@ -97,7 +97,7 @@ def test_a_failing_diagnostic_never_replaces_the_result_with_an_error() -> None:
 
 def test_a_non_dict_probe_result_is_handled() -> None:
     tools = _tools("undefined")
-    out = asyncio.run(tools.get_text_content())
+    out = asyncio.run(tools.get_text_content()).render()
     assert "did not answer a diagnostic query" in out
 
 
@@ -106,7 +106,7 @@ def test_none_text_does_not_crash_pagination() -> None:
         {"readyState": "complete", "url": "https://x.test/", "hasBody": True, "htmlChars": 10},
         text=None,
     )
-    out = asyncio.run(tools.get_text_content())
+    out = asyncio.run(tools.get_text_content()).render()
     assert out.startswith("[chars 0-0 of 0]")
 
 
@@ -127,7 +127,7 @@ def test_a_missing_body_is_diagnosed_rather_than_thrown() -> None:
         {"readyState": "loading", "url": "https://x.test/", "hasBody": False, "htmlChars": 0},
         text="",
     )
-    out = asyncio.run(tools.get_text_content())
+    out = asyncio.run(tools.get_text_content()).render()
     assert out.startswith("[chars 0-0 of 0]")
     assert "still loading" in out
     assert "innerText" not in out, "a TypeError must never reach the caller"

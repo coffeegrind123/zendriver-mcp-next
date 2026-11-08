@@ -19,17 +19,49 @@ from src.tools.base import JS_TIMEOUT_SECONDS, ToolBase
 
 
 class _HungPage:
-    async def evaluate(self, _script: str):
-        await asyncio.Event().wait()  # never returns, like the real thing
+    """A tab whose every CDP command never answers, like the real thing."""
+
+    async def send(self, _cmd):
+        await asyncio.Event().wait()
 
 
 class _FastPage:
-    def __init__(self) -> None:
-        self.scripts: list[str] = []
+    """A tab that answers Runtime.evaluate (and the isolated-world setup)."""
 
-    async def evaluate(self, script: str):
-        self.scripts.append(script)
-        return "ok"
+    def __init__(self) -> None:
+        self.scripts: list[tuple[str, object]] = []
+
+    async def send(self, cmd):
+        request = next(cmd)  # zendriver CDP commands are generators: dict first
+        method, params = request["method"], request.get("params", {})
+        if method == "Page.getFrameTree":
+            reply = {
+                "frameTree": {
+                    "frame": {
+                        "id": "F",
+                        "loaderId": "L",
+                        "url": "about:blank",
+                        "domainAndRegistry": "",
+                        "securityOrigin": "null",
+                        "mimeType": "text/html",
+                        "secureContextType": "InsecureScheme",
+                        "crossOriginIsolatedContextType": "NotIsolated",
+                        "gatedAPIFeatures": [],
+                    }
+                }
+            }
+        elif method == "Page.createIsolatedWorld":
+            reply = {"executionContextId": 7}
+        elif method == "Runtime.evaluate":
+            self.scripts.append((params["expression"], params.get("contextId")))
+            reply = {"result": {"type": "string", "value": "ok"}}
+        else:  # pragma: no cover - a command this test did not expect
+            raise AssertionError(method)
+        try:
+            cmd.send(reply)
+        except StopIteration as stop:
+            return stop.value
+        raise AssertionError("command did not finish")
 
 
 class _Session:
@@ -65,7 +97,17 @@ def test_the_budget_is_below_the_clients_request_timeout() -> None:
     assert JS_TIMEOUT_SECONDS < 30.0
 
 
-def test_an_ordinary_evaluation_is_untouched() -> None:
+def test_an_ordinary_evaluation_runs_in_the_isolated_world() -> None:
     page = _FastPage()
     assert asyncio.run(_tools(page).run_js("document.title")) == "ok"
-    assert page.scripts == ["document.title"]
+    # The store bootstrap, then the script, both in the isolated context (7).
+    assert page.scripts[-1] == ("document.title", 7)
+    assert all(ctx == 7 for _expr, ctx in page.scripts)
+
+
+def test_main_world_is_opt_in() -> None:
+    from src.dom import World
+
+    page = _FastPage()
+    assert asyncio.run(_tools(page).run_js("window.x", world=World.MAIN)) == "ok"
+    assert page.scripts == [("window.x", None)]

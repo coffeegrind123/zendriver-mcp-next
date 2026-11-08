@@ -18,15 +18,42 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 from uuid import uuid4
 
 from mcp.server.mcpserver import MCPServer as FastMCP
+from pydantic import Field
 from zendriver import cdp
 
-from src.errors import AccessibilityUidError, ElementNotFoundError
-from src.response import ToolResponse
+from src.errors import AccessibilityUidError
+from src.registry import Effect, Reach
+from src.response import Result
 from src.tools.base import ToolBase
+
+UID_DESCRIPTION = "A uid from get_accessibility_snapshot. Example: 'ax_1b2c3d4e'"
+
+
+class AxSnapshot(Result):
+    uid_count: int = Field(description="Number of nodes given a uid.")
+    tree: dict[str, Any] | None = Field(
+        default=None,
+        description="Root node: {uid, role, name, children?}; children have the same shape.",
+    )
+
+
+class AxNodeInfo(Result):
+    uid: str = Field(description="The uid described.")
+    role: str = Field(description="Accessibility role, e.g. 'button'.")
+    name: str = Field(description="Accessible name.")
+    backend_node_id: int = Field(description="CDP backend DOM node id (0 for non-DOM nodes).")
+
+
+class AxClick(Result):
+    uid: str = Field(description="The uid clicked.")
+    role: str = Field(description="Its role.")
+    name: str = Field(description="Its accessible name.")
+    x: float = Field(description="Viewport x of the click.")
+    y: float = Field(description="Viewport y of the click.")
 
 
 @dataclass(slots=True)
@@ -68,15 +95,33 @@ class AccessibilityTools(ToolBase):
     def _reset_state(self) -> None:
         self._uids.clear()
 
+    GROUP = "accessibility"
+
     def _register_tools(self) -> None:
         # AX tree is slow on complex pages; 30s keeps the tool callable.
-        self._register(self.get_accessibility_snapshot, timeout=30)
-        self._register(self.click_by_uid)
-        self._register(self.describe_uid)
+        self._register(
+            self.get_accessibility_snapshot, Effect.READ, "Accessibility snapshot", timeout=30
+        )
+        self._register(
+            self.click_by_uid, Effect.WRITE, "Click by accessibility uid", reach=Reach.WEB
+        )
+        self._register(self.describe_uid, Effect.READ, "Describe accessibility uid")
 
     async def get_accessibility_snapshot(
-        self, max_nodes: int = 400, interesting_only: bool = True
-    ) -> dict[str, Any]:
+        self,
+        max_nodes: Annotated[
+            int,
+            Field(
+                description="Cap on the number of nodes returned, to keep the reply small. Example: 400"
+            ),
+        ] = 400,
+        interesting_only: Annotated[
+            bool,
+            Field(
+                description="Skip ignored and structural nodes (generic, StaticText, ...) while keeping their children. Example: true"
+            ),
+        ] = True,
+    ) -> AxSnapshot:
         """Return the page's accessibility tree with stable uids.
 
         Each node looks like ``{"uid": "ax_1b2c", "role": "button",
@@ -178,7 +223,7 @@ class AccessibilityTools(ToolBase):
             return [entry]
 
         if not roots:
-            return ToolResponse(summary="Empty accessibility tree", data={"nodes": []}).to_dict()
+            return AxSnapshot(summary="Empty accessibility tree", uid_count=0)
 
         # Some pages have multiple top-level AX roots (OOPIF iframes,
         # embedded PDFs, etc.). Render every root and flatten the rendered
@@ -191,70 +236,77 @@ class AccessibilityTools(ToolBase):
             tree: dict[str, Any] = top[0]
         else:
             tree = {"uid": "", "role": "", "name": "", "children": top}
-        return ToolResponse(
+        return AxSnapshot(
             summary=f"Accessibility snapshot: {len(self._uids)} nodes",
-            data={"tree": tree, "uid_count": len(self._uids)},
-        ).to_dict()
+            uid_count=len(self._uids),
+            tree=tree,
+        )
 
-    async def describe_uid(self, uid: str) -> dict[str, Any]:
-        """Return the cached role + name for a uid, or raise if unknown."""
+    def _entry(self, uid: str) -> _UidEntry:
         entry = self._uids.get(uid)
         if entry is None:
-            raise AccessibilityUidError(f"Unknown accessibility uid: {uid}")
-        return {
-            "uid": uid,
-            "role": entry.role,
-            "name": entry.name,
-            "backend_node_id": entry.backend_node_id,
-        }
+            from src.suggest import did_you_mean
 
-    async def click_by_uid(self, uid: str) -> str:
-        """Click the DOM node behind an accessibility uid.
+            raise AccessibilityUidError(
+                f"Unknown accessibility uid: {uid}",
+                hint=did_you_mean(uid, list(self._uids)),
+            )
+        return entry
 
-        Resolves the cached ``backend_node_id`` to a remote object, then
-        dispatches a native element click. Raises ``AccessibilityUidError``
-        if the uid is unknown or the node was removed since the snapshot.
+    async def describe_uid(
+        self, uid: Annotated[str, Field(description=UID_DESCRIPTION)]
+    ) -> AxNodeInfo:
+        """Return the role, name and DOM node id cached for an accessibility uid.
+
+        Reads the last snapshot only; it does not touch the page. Fails with a
+        stale_id error if the uid is not in the latest snapshot.
         """
-        entry = self._uids.get(uid)
-        if entry is None or entry.backend_node_id == 0:
-            raise AccessibilityUidError(f"Unknown or non-DOM uid: {uid}")
+        entry = self._entry(uid)
+        return AxNodeInfo(
+            summary=f"{uid}: {entry.role} {entry.name[:60]!r}",
+            uid=uid,
+            role=entry.role,
+            name=entry.name,
+            backend_node_id=entry.backend_node_id,
+        )
 
-        tab = self.session.page
+    async def click_by_uid(
+        self, uid: Annotated[str, Field(description=UID_DESCRIPTION)]
+    ) -> AxClick:
+        """Click the DOM node behind an accessibility uid with a real (trusted) click.
+
+        The click is dispatched as CDP mouse input at the node's centre, after
+        scrolling it into view, so the page sees an ordinary user click. Fails
+        if the uid is unknown, its node was removed since the snapshot, or
+        something else covers it.
+        """
+        entry = self._entry(uid)
+        if entry.backend_node_id == 0:
+            raise AccessibilityUidError(
+                f"uid {uid} ({entry.role}) has no DOM node to click.",
+                hint="Pick an interactive node (button, link, textbox) from the snapshot.",
+            )
+
+        label = f"uid:{uid}"
         try:
-            remote = await tab.send(
-                cdp.dom.resolve_node(backend_node_id=cdp.dom.BackendNodeId(entry.backend_node_id))
+            handle = await self.dom.handle_for_node(
+                cdp.dom.BackendNodeId(entry.backend_node_id), label
             )
-        except Exception as exc:  # zendriver raises ProtocolException on stale nodes
-            raise AccessibilityUidError(f"uid {uid} no longer maps to a live DOM node") from exc
-
-        if remote is None or remote.object_id is None:
-            raise ElementNotFoundError(f"uid:{uid}")
-
-        quads = await tab.send(cdp.dom.get_content_quads(object_id=remote.object_id))
-        if not quads:
-            raise AccessibilityUidError(f"uid {uid} has no visible content box")
-        q = quads[0]
-        cx = (q[0] + q[2] + q[4] + q[6]) / 4
-        cy = (q[1] + q[3] + q[5] + q[7]) / 4
-        await tab.send(
-            cdp.input_.dispatch_mouse_event(
-                type_="mousePressed",
-                x=cx,
-                y=cy,
-                button=cdp.input_.MouseButton.LEFT,
-                click_count=1,
-            )
+        except Exception as exc:  # stale backend node ids raise from CDP
+            raise AccessibilityUidError(
+                f"uid {uid} no longer maps to a live DOM node",
+                hint="Take a fresh get_accessibility_snapshot and use a uid from it.",
+            ) from exc
+        x, y = await self.dom.center(handle)
+        await self.dom.click(handle)
+        return AxClick(
+            summary=f"Clicked uid {uid} ({entry.role}: {entry.name[:40]})",
+            uid=uid,
+            role=entry.role,
+            name=entry.name,
+            x=round(x, 1),
+            y=round(y, 1),
         )
-        await tab.send(
-            cdp.input_.dispatch_mouse_event(
-                type_="mouseReleased",
-                x=cx,
-                y=cy,
-                button=cdp.input_.MouseButton.LEFT,
-                click_count=1,
-            )
-        )
-        return f"Clicked uid {uid} ({entry.role}: {entry.name[:40]})"
 
 
 def _string_value(ax_value: dict[str, Any] | None) -> str:

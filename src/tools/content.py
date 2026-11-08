@@ -1,21 +1,85 @@
 # page content tools - get html, get text, scroll
-from typing import Annotated, Literal
+import json
+from typing import Annotated, Any, Literal
 
 from pydantic import Field
 
+from src.registry import Effect
+from src.response import Result
 from src.tools.base import ToolBase
+
+
+class Page(Result):
+    """One slice of a long text, with what is needed to ask for the next."""
+
+    offset: int = Field(description="First character of this slice.")
+    end: int = Field(description="One past the last character of this slice.")
+    total: int = Field(description="Length of the whole text.")
+    next_offset: int | None = Field(
+        default=None, description="Offset to request next; absent on the last slice."
+    )
+    text: str = Field(description="The slice itself.")
+
+    def header(self) -> str:
+        h = f"[chars {self.offset}-{self.end} of {self.total}]"
+        if self.next_offset is not None:
+            h += f" (next: offset={self.next_offset})"
+        return h
+
+    def render(self) -> str:
+        return f"{self.header()}\n{self.text}"
+
+
+class TextPage(Page):
+    diagnosis: str | None = Field(
+        default=None,
+        description="Only on an empty result: why the page has no visible text, and what to do.",
+    )
+
+    def render(self) -> str:
+        out = super().render()
+        return f"{out}\n{self.diagnosis}" if self.diagnosis else out
+
+
+class InteractionTree(Result):
+    elements: list[dict[str, Any]] = Field(
+        description=(
+            "Interactive elements: id (pass to click/type_text), t type (btn, link, in, "
+            "chk, rad, sel, tab, mnu, el), l label, r region (hdr, nav, main, side, ftr, "
+            "dlg), and when relevant h link target, it input type, v value, ck checked, "
+            "dis disabled, off offscreen."
+        )
+    )
+    total: int = Field(description="How many interactive elements the page has.")
+    truncated: bool = Field(description="Whether `limit` cut the list short.")
+
+    def render(self) -> str:
+        payload = json.dumps(self.elements, separators=(",", ":"), ensure_ascii=False)
+        if self.truncated:
+            return (
+                f"[showing {len(self.elements)} of {self.total} elements; raise limit for more]"
+                f"\n{payload}"
+            )
+        return payload
+
+
+class ScrollResult(Result):
+    target: str | None = Field(default=None, description="Selector scrolled to, if any.")
+    scroll_y: float | None = Field(default=None, description="Vertical scroll position afterwards.")
 
 
 class ContentTools(ToolBase):
     """tools for page content and scrolling"""
 
+    GROUP = "content"
+
     def _register_tools(self) -> None:
         """register content tools"""
-        self._register(self.get_content)
-        self._register(self.get_text_content)
-        self._register(self.get_interaction_tree)
-        self._register(self.scroll)
-        self._register(self.scroll_to_element)
+        self._register(self.get_content, Effect.READ, "Page HTML")
+        self._register(self.get_text_content, Effect.READ, "Page text")
+        self._register(self.get_interaction_tree, Effect.READ, "Interactive elements")
+        self._register(self.scroll, Effect.WRITE, "Scroll page")
+        self._register(self.scroll_to_element, Effect.WRITE, "Scroll to element", idempotent=True)
 
     async def get_content(
         self,
@@ -31,17 +95,20 @@ class ContentTools(ToolBase):
                 description="Character offset to start from, for paging through a large page. Example: 0"
             ),
         ] = 0,
-    ) -> str:
+    ) -> Page:
         """Get the page's full rendered HTML, including markup and attributes.
 
         Use when you need selectors, attributes, or hidden markup. Prefer
         get_text_content when you only want readable text, and
         get_interaction_tree when you want something to click — both are far
-        cheaper. Returns a '[chars X-Y of TOTAL]' header then the requested
-        slice; when more remains the header names the next offset to request.
+        cheaper. Read through CDP's DOM domain, so no page JavaScript runs.
+        Returns the requested slice with offset, end, total and next_offset
+        (absent on the last slice); the text form starts with a
+        '[chars X-Y of TOTAL]' header.
         """
         content = await self.session.page.get_content()
-        return self._paginate(content, max_chars, offset)
+        page = self._paginate(content, max_chars, offset)
+        return Page(summary=page.header(), **page.model_dump(exclude={"summary"}))
 
     async def get_text_content(
         self,
@@ -57,13 +124,14 @@ class ContentTools(ToolBase):
                 description="Character offset to start from, for paging through long text. Example: 0"
             ),
         ] = 0,
-    ) -> str:
+    ) -> TextPage:
         """Get the page's visible text, without any HTML markup.
 
         Use for reading or extracting page copy. Text hidden by CSS is excluded,
         and no selectors are returned, so use get_interaction_tree if you intend
-        to interact. Same '[chars X-Y of TOTAL]' pagination contract as
-        get_content: the header reports total length and the next offset.
+        to interact. Same pagination contract as get_content. An empty result
+        carries a diagnosis saying whether the page is still loading, has no
+        body, keeps its text in iframes or shadow roots, or really is blank.
         """
         # Null-safe on purpose. `document.body.innerText` THROWS when the body
         # does not exist yet, and a thrown CDP exception reaches the caller as a
@@ -73,15 +141,17 @@ class ContentTools(ToolBase):
         # page that had simply not finished loading. Returning empty lets the
         # diagnosis below say which of the possible causes it actually is.
         text = await self.run_js("document.body ? document.body.innerText : ''")
-        rendered = self._paginate(str(text or ""), max_chars, offset)
+        page = self._paginate(str(text or ""), max_chars, offset)
+        fields = page.model_dump(exclude={"summary"})
         if text:
-            return rendered
+            return TextPage(summary=page.header(), **fields)
         # An empty result is the one answer this tool cannot leave ambiguous.
         # "[chars 0-0 of 0]" reads as "this page has no text", and a caller that
         # believes it goes looking for a consent wall or a different source. The
         # usual cause is that nothing has rendered yet, which is a completely
         # different fix, so say which one it is.
-        return f"{rendered}\n{await self._empty_text_diagnosis()}"
+        diagnosis = await self._empty_text_diagnosis()
+        return TextPage(summary=f"{page.header()} {diagnosis}", diagnosis=diagnosis, **fields)
 
     async def _empty_text_diagnosis(self) -> str:
         """Explain an empty innerText: not-yet-rendered, no body, or genuinely blank."""
@@ -122,17 +192,23 @@ class ContentTools(ToolBase):
         return f"(no visible text — the page really is blank: {detail})"
 
     @staticmethod
-    def _paginate(text: str, max_chars: int, offset: int) -> str:
-        """Slice ``text`` with a one-line header so agents can page deliberately."""
+    def _paginate(text: str, max_chars: int, offset: int) -> Page:
+        """Slice ``text`` and say where it sits, so agents can page deliberately."""
         max_chars = max(1, max_chars)
         total = len(text)
         offset = min(max(0, offset), total)
         chunk = text[offset : offset + max_chars]
         end = offset + len(chunk)
-        header = f"[chars {offset}-{end} of {total}]"
-        if end < total:
-            header += f" (next: offset={end})"
-        return f"{header}\n{chunk}"
+        page = Page(
+            summary="",
+            offset=offset,
+            end=end,
+            total=total,
+            next_offset=end if end < total else None,
+            text=chunk,
+        )
+        page.summary = page.header()
+        return page
 
     async def get_interaction_tree(
         self,
@@ -148,16 +224,17 @@ class ContentTools(ToolBase):
                 description="Include each link's target as 'h' (a path when same-origin). Off by default because it roughly doubles the output; turn it on when you need to follow or identify a link. Example: true"
             ),
         ] = False,
-    ) -> str:
+    ) -> InteractionTree:
         """List the page's interactive elements, each with a short numeric id.
 
         The cheapest way to see what can be clicked or typed into: it walks the
         DOM including shadow roots for buttons, links, and inputs. The numeric ids
         it assigns are accepted directly by click, type_text, and the other
-        element tools in place of a CSS selector. Ids are invalidated by any
-        navigation or re-render, so re-run after those. Returns compact JSON,
-        capped at limit with a note when the cap is hit, or an error string if
-        the page could not be analysed.
+        element tools in place of a CSS selector. An id stays valid while its
+        element exists, survives later walks, and expires on navigation; an
+        expired one fails with stale_id. The walk runs in an isolated world and
+        leaves no trace in the page. Returns the elements (capped at limit),
+        the total, and whether the cap cut the list short.
 
         Pass links=true to get each link's target as `h` — a path when it is
         same-origin, a full URL otherwise. Following a link then means a navigate
@@ -167,36 +244,28 @@ class ContentTools(ToolBase):
         for javascript: handlers, bare "#" anchors, or links back to the current
         page, none of which can take you anywhere.
         """
-        import json
-        import os
-
-        # Load the JS walker script
-        script_path = os.path.join(os.path.dirname(__file__), "..", "static", "js", "dom_walker.js")
-        if not os.path.exists(script_path):
-            return "Error: dom_walker.js not found in static/js"
-
-        with open(script_path, encoding="utf-8") as f:
-            js_code = f.read()
-
-        try:
-            tree = await self.run_js(js_code)
-        except Exception as e:
-            return f"Error analyzing page: {str(e)}"
-
-        tree = tree or []
+        tree = await self._walk()
         # The walker always collects link targets; whether the CALLER pays for
         # them is decided here, because the cost is in the returned JSON rather
-        # than in the walk.
+        # than in the walk. Non-dict entries cannot come from our walker, but it
+        # is JavaScript and validates nothing, so they are dropped, not trusted.
+        elements = [dict(e) for e in tree if isinstance(e, dict)]
         if not links:
-            for element in tree:
-                if isinstance(element, dict):
-                    element.pop("h", None)
+            for element in elements:
+                element.pop("h", None)
         limit = max(1, limit)
-        total = len(tree)
-        payload = json.dumps(tree[:limit], separators=(",", ":"))
-        if total > limit:
-            return f"[showing {limit} of {total} elements; raise limit for more]\n{payload}"
-        return payload
+        total = len(elements)
+        shown = elements[:limit]
+        return InteractionTree(
+            summary=f"{total} interactive element(s)"
+            + (f", showing {limit}" if total > limit else ""),
+            elements=shown,
+            total=total,
+            truncated=total > limit,
+        )
+
+    async def _walk(self) -> list[Any]:
+        return await self.dom.walk()
 
     async def scroll(
         self,
@@ -207,39 +276,41 @@ class ContentTools(ToolBase):
         amount: Annotated[
             int, Field(description="Distance to scroll in CSS pixels. Example: 500")
         ] = 500,
-    ) -> str:
+    ) -> ScrollResult:
         """Scroll the page vertically by a pixel amount.
 
         Use to reach content below the fold or to trigger lazy loading. To reach
-        one known element instead, scroll_to_element is more reliable. Returns a
-        confirmation naming the direction and distance scrolled.
+        one known element instead, scroll_to_element is more reliable. Scrolls
+        with a synthesized wheel gesture, as a user would. Returns the vertical
+        scroll position afterwards.
         """
         page = self.session.page
         if direction == "down":
             await page.scroll_down(amount)
-            return f"Scrolled down {amount}px"
-        elif direction == "up":
+        else:
             await page.scroll_up(amount)
-            return f"Scrolled up {amount}px"
-        return f"Invalid direction: {direction}"
+        y = await self.run_js("window.scrollY")
+        return ScrollResult(summary=f"Scrolled {direction} {amount}px (scrollY={y})", scroll_y=y)
 
     async def scroll_to_element(
         self,
         selector: Annotated[
             str,
             Field(
-                description="CSS selector of the element to scroll into view. Example: '#checkout-button'"
+                description="CSS selector, or a numeric id from get_interaction_tree, of the element to scroll into view. Example: '#checkout-button'"
             ),
         ],
-    ) -> str:
-        """Smooth-scroll the page until one element is centred in the viewport.
+    ) -> ScrollResult:
+        """Scroll the page until one element is centred in the viewport.
 
-        Use before clicking something below the fold, or to trigger lazy loading
-        at a known point. Silently does nothing if the selector matches no
-        element. Returns a confirmation naming the selector.
+        Use to bring something below the fold into view or to trigger lazy
+        loading at a known point. click scrolls on its own, so this is not
+        needed before clicking. Fails with element_not_found when the selector
+        matches nothing.
         """
-        safe_sel = self.escape_js_string(selector)
-        await self.run_js(
-            f'document.querySelector("{safe_sel}")?.scrollIntoView({{behavior: "smooth", block: "center"}})'
+        y = await self.element_call(
+            selector,
+            "function(el) { el.scrollIntoView({block: 'center', inline: 'nearest'});"
+            " return window.scrollY; }",
         )
-        return f"Scrolled to: {selector}"
+        return ScrollResult(summary=f"Scrolled to: {selector}", target=selector, scroll_y=y)

@@ -25,6 +25,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.errors import ZendriverMCPError
 
@@ -110,3 +111,49 @@ def resolve_artifact_dir(file_path: str, *, default_prefix: str) -> Path:
         f"Refusing to use directory {target}: outside allowed roots "
         f"({', '.join(str(r) for r in _allowed_roots())})."
     )
+
+
+# ---------------------------------------------------------------------------
+# Artifacts as MCP resources
+#
+# A tool that writes a file also publishes it as browser://artifacts/<name>, so a
+# client on another machine (an HTTP server) or one that cannot read the
+# server's disk can still fetch it with resources/read. Only files a tool wrote
+# in this process are served: the index is the allow-list, and nothing outside
+# it is readable through the resource, whatever the URI says.
+
+ARTIFACT_SCHEME = "browser://artifacts/"
+
+_INDEX: dict[str, tuple[Path, str]] = {}
+
+
+def publish(path: Path | str, mime_type: str | None = None) -> Artifact:
+    """Record a written file and describe it for a tool result."""
+    import mimetypes
+
+    from src.response import Artifact
+
+    p = Path(path).resolve()
+    mime = mime_type or mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    name = p.name
+    # Two files with one basename (same name, different dirs) must not shadow
+    # each other: suffix the later one.
+    n = 1
+    while name in _INDEX and _INDEX[name][0] != p:
+        n += 1
+        name = f"{p.stem}-{n}{p.suffix}"
+    _INDEX[name] = (p, mime)
+    return Artifact(path=str(p), uri=ARTIFACT_SCHEME + name, mime_type=mime, size=p.stat().st_size)
+
+
+def lookup(name: str) -> tuple[Path, str] | None:
+    """The file and MIME type behind an artifact name, if this process wrote it."""
+    return _INDEX.get(name)
+
+
+def listing() -> list[tuple[str, Path, str]]:
+    return [(name, p, mime) for name, (p, mime) in _INDEX.items()]
+
+
+if TYPE_CHECKING:  # pragma: no cover
+    from src.response import Artifact

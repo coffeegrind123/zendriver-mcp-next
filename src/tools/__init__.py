@@ -4,9 +4,13 @@ from typing import Any
 
 from mcp.server.mcpserver import MCPServer as FastMCP
 
+from src import __version__
+from src.instructions import INSTRUCTIONS
+from src.resources import install_resources
 from src.tools.accessibility import AccessibilityTools
 from src.tools.base import ToolBase
 from src.tools.browser import BrowserTools
+from src.tools.catalog import Surface, install_catalog
 from src.tools.content import ContentTools
 from src.tools.cookies import CookieTools
 from src.tools.devtools import DevToolsTools
@@ -29,12 +33,17 @@ from src.tools.tabs import TabTools
 from src.tools.utils import UtilityTools
 
 # initialize the MCP server
-mcp = FastMCP("Zendriver MCP")
+mcp = FastMCP(
+    "zendriver",
+    title="Zendriver browser",
+    description="A real, headed Chrome driven over CDP, built to look like a person's browser.",
+    instructions=INSTRUCTIONS,
+    version=__version__,
+    website_url="https://github.com/coffeegrind123/zendriver-mcp-next",
+)
 
-# register all tool modules and keep instances for backwards compatibility.
-# Capture, per module, the tool names it registers so tools can be grouped for
-# profile filtering and the search gateway (both below) without a hand-kept map
-# that would drift as tools are added.
+# Register every module, capturing the tool names each adds so profiles and the
+# catalogue can group them without a hand-kept map that would drift.
 _MODULES = [
     ("browser", BrowserTools),
     ("navigation", NavigationTools),
@@ -61,35 +70,11 @@ _MODULES = [
 ]
 
 _TOOL_GROUPS: dict[str, list[str]] = {}
-_INSTANCES: dict[str, Any] = {}  # values are concrete ToolBase subclasses
+_INSTANCES: dict[str, Any] = {}
 for _group, _cls in _MODULES:
     _before = set(mcp._tool_manager._tools)
     _INSTANCES[_group] = _cls(mcp)
     _TOOL_GROUPS[_group] = sorted(set(mcp._tool_manager._tools) - _before)
-
-# backwards-compatible instance handles
-_browser_tools = _INSTANCES["browser"]
-_navigation_tools = _INSTANCES["navigation"]
-_tab_tools = _INSTANCES["tabs"]
-_element_tools = _INSTANCES["elements"]
-_query_tools = _INSTANCES["query"]
-_content_tools = _INSTANCES["content"]
-_storage_tools = _INSTANCES["storage"]
-_logging_tools = _INSTANCES["logging"]
-_form_tools = _INSTANCES["forms"]
-_utility_tools = _INSTANCES["utils"]
-_stealth_tools = _INSTANCES["stealth"]
-_human_input_tools = _INSTANCES["humaninput"]
-_emulation_tools = _INSTANCES["emulation"]
-_devtools_tools = _INSTANCES["devtools"]
-_lighthouse_tools = _INSTANCES["lighthouse"]
-_screencast_tools = _INSTANCES["screencast"]
-_accessibility_tools = _INSTANCES["accessibility"]
-_cookie_tools = _INSTANCES["cookies"]
-_network_control_tools = _INSTANCES["network"]
-_permissions_tools = _INSTANCES["permissions"]
-_proxy_tools = _INSTANCES["proxy"]
-_interception_tools = _INSTANCES["interception"]
 
 
 def _declare_explicit_required(server: FastMCP) -> None:
@@ -149,14 +134,15 @@ _PROFILES: dict[str, set[str]] = {
 def _apply_tool_filter(server: FastMCP) -> None:
     """Narrow the exposed tool surface from env (issue #307: too many tools).
 
-    ZENDRIVER_MCP_PROFILE  one of: full, minimal, browse, interact, scrape, stealth
-    ZENDRIVER_MCP_GROUPS   comma/space list of groups (browser, navigation, tabs,
-                           elements, query, content, storage, logging, forms,
-                           utils, stealth)
+    Narrows which tools EXIST in this process (listed or reachable through
+    call_tool); ZENDRIVER_MCP_SURFACE then decides which of them are listed.
+
+    ZENDRIVER_MCP_PROFILE  one of: full, minimal, browse, interact, scrape,
+                           stealth, audit, network (gateway = full, catalog surface)
+    ZENDRIVER_MCP_GROUPS   comma/space list of groups (see _MODULES)
     ZENDRIVER_MCP_ALLOW    comma/space list of exact tool names to keep
     ZENDRIVER_MCP_DENY     comma/space list of exact tool names to remove
-    Unset -> every tool is exposed (unchanged default). PROFILE=gateway is
-    handled by the search gateway below, not here.
+    Unset -> every tool exists.
     """
     profile = os.environ.get("ZENDRIVER_MCP_PROFILE", "").strip().lower()
     groups = _split_env("ZENDRIVER_MCP_GROUPS")
@@ -192,155 +178,29 @@ def _apply_tool_filter(server: FastMCP) -> None:
 
 _apply_tool_filter(mcp)
 
-# Optional search gateway: hide most tools behind search_tools/describe_tool/
-# call_tool so the client sees ~10 tools instead of ~56 (issue #307 / RAG-MCP).
-_gateway_on = os.environ.get("ZENDRIVER_MCP_GATEWAY", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-if _gateway_on or os.environ.get("ZENDRIVER_MCP_PROFILE", "").strip().lower() == "gateway":
-    from src.tools.gateway import install_gateway
 
-    install_gateway(mcp, _TOOL_GROUPS)
+def _surface() -> Surface:
+    """Which tools tools/list shows. Fixed for the life of the process.
 
+    ZENDRIVER_MCP_SURFACE=catalog (default) lists the core loop plus the
+    search/call/batch/jobs meta-tools; =full lists every tool. The older
+    switches ZENDRIVER_MCP_GATEWAY=1 and ZENDRIVER_MCP_PROFILE=gateway mean
+    catalog, and are kept so existing configs keep working.
+    """
+    raw = os.environ.get("ZENDRIVER_MCP_SURFACE", "").strip().lower()
+    if raw:
+        try:
+            return Surface(raw)
+        except ValueError:
+            raise SystemExit(
+                f"ZENDRIVER_MCP_SURFACE={raw!r} is not one of: "
+                + ", ".join(m.value for m in Surface)
+            ) from None
+    return Surface.CATALOG
+
+
+CATALOG = install_catalog(mcp, _surface())
+install_resources(mcp)
 _declare_explicit_required(mcp)
 
-# export individual tool functions for backwards compatibility
-# browser lifecycle
-start_browser = _browser_tools.start_browser
-stop_browser = _browser_tools.stop_browser
-get_browser_status = _browser_tools.get_browser_status
-
-# navigation
-navigate = _navigation_tools.navigate
-go_back = _navigation_tools.go_back
-go_forward = _navigation_tools.go_forward
-reload_page = _navigation_tools.reload_page
-get_page_info = _navigation_tools.get_page_info
-
-# tabs
-new_tab = _tab_tools.new_tab
-list_tabs = _tab_tools.list_tabs
-switch_tab = _tab_tools.switch_tab
-close_tab = _tab_tools.close_tab
-
-# elements
-click = _element_tools.click
-type_text = _element_tools.type_text
-clear_input = _element_tools.clear_input
-focus_element = _element_tools.focus_element
-select_option = _element_tools.select_option
-upload_file = _element_tools.upload_file
-
-# query
-find_element = _query_tools.find_element
-find_all_elements = _query_tools.find_all_elements
-get_element_text = _query_tools.get_element_text
-get_element_attribute = _query_tools.get_element_attribute
-find_buttons = _query_tools.find_buttons
-find_inputs = _query_tools.find_inputs
-
-# content
-get_content = _content_tools.get_content
-get_text_content = _content_tools.get_text_content
-get_interaction_tree = _content_tools.get_interaction_tree
-scroll = _content_tools.scroll
-scroll_to_element = _content_tools.scroll_to_element
-
-# storage
-get_cookies = _storage_tools.get_cookies
-set_cookie = _storage_tools.set_cookie
-get_local_storage = _storage_tools.get_local_storage
-set_local_storage = _storage_tools.set_local_storage
-clear_storage = _storage_tools.clear_storage
-
-# logging
-get_network_logs = _logging_tools.get_network_logs
-get_console_logs = _logging_tools.get_console_logs
-clear_logs = _logging_tools.clear_logs
-wait_for_network = _logging_tools.wait_for_network
-wait_for_request = _logging_tools.wait_for_request
-
-# forms
-fill_form = _form_tools.fill_form
-submit_form = _form_tools.submit_form
-press_key = _form_tools.press_key
-press_enter = _form_tools.press_enter
-mouse_click = _form_tools.mouse_click
-
-# utils
-screenshot = _utility_tools.screenshot
-execute_js = _utility_tools.execute_js
-wait = _utility_tools.wait
-wait_for_element = _utility_tools.wait_for_element
-run_security_audit = _utility_tools.run_security_audit
-
-__all__ = [
-    # mcp server
-    "mcp",
-    # base class
-    "ToolBase",
-    # tool classes
-    "BrowserTools",
-    "NavigationTools",
-    "TabTools",
-    "ElementTools",
-    "QueryTools",
-    "ContentTools",
-    "StorageTools",
-    "LoggingTools",
-    "FormTools",
-    "UtilityTools",
-    # individual tool functions
-    "start_browser",
-    "stop_browser",
-    "get_browser_status",
-    "navigate",
-    "go_back",
-    "go_forward",
-    "reload_page",
-    "get_page_info",
-    "new_tab",
-    "list_tabs",
-    "switch_tab",
-    "close_tab",
-    "click",
-    "type_text",
-    "clear_input",
-    "focus_element",
-    "select_option",
-    "upload_file",
-    "find_element",
-    "find_all_elements",
-    "get_element_text",
-    "get_element_attribute",
-    "find_buttons",
-    "find_inputs",
-    "get_content",
-    "get_text_content",
-    "get_interaction_tree",
-    "scroll",
-    "scroll_to_element",
-    "get_cookies",
-    "set_cookie",
-    "get_local_storage",
-    "set_local_storage",
-    "clear_storage",
-    "get_network_logs",
-    "get_console_logs",
-    "clear_logs",
-    "wait_for_network",
-    "wait_for_request",
-    "fill_form",
-    "submit_form",
-    "press_key",
-    "press_enter",
-    "mouse_click",
-    "screenshot",
-    "execute_js",
-    "wait",
-    "wait_for_element",
-    "run_security_audit",
-]
+__all__ = ["mcp", "CATALOG", "ToolBase"]

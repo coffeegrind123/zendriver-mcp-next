@@ -144,7 +144,7 @@ def test_start_browser_reports_headed_and_names_the_override(
 ) -> None:
     tools, calls = _tools(monkeypatch, "src.tools.browser", "BrowserTools")
 
-    message = asyncio.run(tools.start_browser(headless=True))
+    message = asyncio.run(tools.start_browser(headless=True)).summary
 
     assert "headed mode" in message
     assert "headless mode" not in message, "reporting the requested mode is the whole defect"
@@ -158,7 +158,7 @@ def test_start_browser_says_nothing_extra_when_headed_was_asked_for(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tools, _ = _tools(monkeypatch, "src.tools.browser", "BrowserTools")
-    message = asyncio.run(tools.start_browser())
+    message = asyncio.run(tools.start_browser()).summary
     assert message == "Browser started in headed mode"
 
 
@@ -168,9 +168,19 @@ def test_the_proxy_restarts_carry_the_same_note(monkeypatch: pytest.MonkeyPatch)
     configured = asyncio.run(tools.configure_proxy("http://10.0.0.1:8080", headless=True))
     cleared = asyncio.run(tools.clear_proxy(headless=True))
 
-    assert HEADED_ONLY_NOTE in configured
-    assert HEADED_ONLY_NOTE in cleared
-    assert HEADED_ONLY_NOTE not in asyncio.run(tools.clear_proxy())
+    assert HEADED_ONLY_NOTE in configured.summary
+    assert configured.headless_ignored
+    assert HEADED_ONLY_NOTE in cleared.summary
+    assert HEADED_ONLY_NOTE not in asyncio.run(tools.clear_proxy()).summary
+
+
+def test_the_proxy_password_is_not_echoed(monkeypatch: pytest.MonkeyPatch) -> None:
+    tools, calls = _tools(monkeypatch, "src.tools.proxy", "ProxyTools")
+    result = asyncio.run(tools.configure_proxy("http://bob:s3cret@10.0.0.1:8080"))
+    assert "s3cret" not in result.summary and "s3cret" not in (result.proxy or "")
+    assert calls[0]["proxy"] == "http://bob:s3cret@10.0.0.1:8080", (
+        "the real URL still reaches Chrome"
+    )
 
 
 def test_the_start_browser_schema_does_not_advertise_headless() -> None:

@@ -4,20 +4,37 @@ import functools
 import inspect
 import os
 import time
+import typing
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.mcpserver import MCPServer as FastMCP
+from pydantic import Field
 
+from src.dom import Dom, Handle, World, dom_for
 from src.errors import (
     BrowserNotStartedError,
     BrowserUnreachableError,
+    Code,
     ElementNotFoundError,
     ToolTimeoutError,
     ZendriverMCPError,
 )
-from src.session import BrowserSession, tool_timeout_budget
+from src.registry import Effect, Reach, ToolSpec, register
+from src.response import Result, error_result
+from src.session import CALL_TAB, BrowserSession, tool_timeout_budget
+
+TAB_DESCRIPTION = (
+    "Tab id from list_tabs or new_tab to act on, instead of the active tab. The "
+    "active tab does not change. Omit to use the active tab. Example: 'tab_2'"
+)
+TAB_PARAMETER = inspect.Parameter(
+    "tab",
+    inspect.Parameter.KEYWORD_ONLY,
+    default=None,
+    annotation=Annotated[str | None, Field(description=TAB_DESCRIPTION)],
+)
 
 # How long a single JavaScript evaluation may take before it is called hung.
 # Generous enough for a heavy DOM walk, short enough to stay inside the MCP
@@ -61,9 +78,6 @@ AUTOSTART_BROWSER = _autostart_enabled()
 # otherwise both see "no browser" and race two Chrome launches.
 _autostart_lock = asyncio.Lock()
 
-# Must match ``ATTR`` in src/static/js/dom_walker.js.
-ZENDRIVER_ID_ATTR = "data-zendriver-id"
-
 
 def _timeout_error(name: str, budget: float, elapsed: float, exc: BaseException) -> BaseException:
     """Tell "the tool ran too long" apart from "something inside it timed out".
@@ -85,7 +99,8 @@ def _timeout_error(name: str, budget: float, elapsed: float, exc: BaseException)
         message = str(exc).strip() or "an internal operation timed out"
         return ZendriverMCPError(
             f"{message} (this is not the tool's {budget:.0f}s budget — it returned "
-            f"after {elapsed:.1f}s, so the operation itself gave up)"
+            f"after {elapsed:.1f}s, so the operation itself gave up)",
+            code=Code.OPERATION_TIMEOUT,
         )
     return ToolTimeoutError(name, budget)
 
@@ -105,30 +120,8 @@ class ToolBase(ABC):
             self._session.register_reset_callback(reset)
         self._register_tools()
 
-    @staticmethod
-    def resolve_selector(selector: str) -> str:
-        """Turn a numeric id from ``get_interaction_tree`` into a CSS selector.
-
-        The DOM walker tags interactive elements with ``data-zendriver-id``;
-        tools accept either a real CSS selector or that numeric id. This helper
-        centralises the conversion so every tool treats them the same way.
-        """
-        if selector.isdigit():
-            return f'[{ZENDRIVER_ID_ATTR}="{selector}"]'
-        return selector
-
-    async def try_select(self, selector: str, timeout: float = 2.0):
-        """Select an element, returning ``None`` on miss instead of raising.
-
-        Use when the logic legitimately branches on presence (e.g. a
-        visibility probe before clicking).
-        """
-        import asyncio as _asyncio
-
-        try:
-            return await self._session.page.select(selector, timeout=timeout)
-        except _asyncio.TimeoutError:
-            return None
+    # ------------------------------------------------------------------
+    # registration
 
     @abstractmethod
     def _register_tools(self) -> None:
@@ -137,80 +130,157 @@ class ToolBase(ABC):
     def _register(
         self,
         fn: "Callable[..., Coroutine[Any, Any, Any]]",
+        effect: Effect,
+        title: str,
+        *,
+        reach: Reach = Reach.LOCAL,
+        idempotent: bool = False,
+        page_scoped: bool = True,
         timeout: float | None = None,
     ) -> None:
-        """Register ``fn`` as an MCP tool, guarded by a time budget so one hung CDP call
-        can never freeze the whole MCP session. Budget defaults to DEFAULT_TOOL_TIMEOUT
-        (120s, or $ZENDRIVER_MCP_TOOL_TIMEOUT); override per slow tool. (Ported from bituq.)"""
+        """Register ``fn`` as a tool with its annotations, budget and error model.
+
+        Every registered tool:
+
+        * runs under a time budget, so one hung CDP call can never freeze the
+          whole MCP session (DEFAULT_TOOL_TIMEOUT, or ``timeout``);
+        * reports every failure as an ``isError`` result with
+          ``{error, code, hint}`` (src/response.py), never as a success string;
+        * returns a :class:`Result`, sent as structuredContent plus text;
+        * if ``page_scoped``, takes an optional ``tab`` argument that runs this
+          one call against another tab without changing the active one.
+        """
         budget = float(timeout) if timeout is not None else DEFAULT_TOOL_TIMEOUT
         name = fn.__name__
+        group = getattr(self, "GROUP", type(self).__name__)
+        spec = ToolSpec(
+            name=name,
+            title=title,
+            group=group,
+            effect=effect,
+            reach=reach,
+            idempotent=idempotent,
+            page_scoped=page_scoped,
+            timeout=budget,
+        )
+
+        # Resolve string annotations against the TOOL's module now. The wrapper
+        # lives in this module, and both the SDK's schema builder and its Context
+        # detection evaluate annotations against the wrapper's globals, where a
+        # tool module's result models are not defined.
+        hints = typing.get_type_hints(fn, include_extras=True)
+        sig = inspect.signature(fn, eval_str=True)
+        params = list(sig.parameters.values())
+        takes_tab = page_scoped and "tab" not in sig.parameters
+        if takes_tab:
+            params.append(TAB_PARAMETER)
+            hints["tab"] = TAB_PARAMETER.annotation
+        sig = sig.replace(parameters=params)
 
         @functools.wraps(fn)
         async def guarded(*args: Any, **kwargs: Any) -> Any:
-            started = time.monotonic()
+            tab_id = kwargs.pop("tab", None) if takes_tab else None
+            token = None
             try:
-                return await asyncio.wait_for(fn(*args, **kwargs), timeout=budget)
-            except asyncio.TimeoutError as exc:
-                err = _timeout_error(name, budget, time.monotonic() - started, exc)
-                # A wedged Chrome shows up HERE and nowhere else. The recovery
-                # below only runs from `except Exception`, so a browser that hangs
-                # instead of exiting never reaches it: is_dead() is
-                # `browser.stopped`, and a hung process has not stopped. Measured
-                # 2026-09-02 -- a crashpad ptrace deadlock left the DevTools port
-                # accepting connections and answering nothing for 22 hours while
-                # every call returned this same timeout and nothing self-healed.
-                # Probing the endpoint is what tells "slow" from "gone".
-                if isinstance(err, ToolTimeoutError):
-                    if await self._session.discard_if_unreachable():
-                        raise BrowserUnreachableError(name, budget, AUTOSTART_BROWSER) from exc
-                raise err from exc
-            except BrowserNotStartedError:
-                # Retried once, and only once: if the browser still is not there
-                # after a start, something is wrong with the launch and the
-                # caller needs to see that error rather than a loop.
-                if not AUTOSTART_BROWSER or name == "start_browser":
-                    raise
-                async with _autostart_lock:
-                    if self._session.is_running():
-                        pass  # another call won the race and started it
-                    else:
-                        await self._session.start()
-                retried = time.monotonic()
-                try:
-                    return await asyncio.wait_for(fn(*args, **kwargs), timeout=budget)
-                except asyncio.TimeoutError as exc:
-                    raise _timeout_error(name, budget, time.monotonic() - retried, exc) from exc
-            except Exception:
-                # Chrome died underneath a live session — crash, OOM kill, a user
-                # closing the window. The session still holds a Browser object,
-                # so this arrives as a websocket error rather than
-                # BrowserNotStartedError, and every later call fails the same way
-                # until someone restarts it by hand.
-                #
-                # is_dead() is the whole guard: an ordinary tool failure with a
-                # healthy browser is re-raised untouched.
-                if not AUTOSTART_BROWSER or name == "start_browser":
-                    raise
-                if not self._session.is_dead():
-                    raise
-                async with _autostart_lock:
-                    if self._session.is_dead():
-                        self._session.discard()
-                    if not self._session.is_running():
-                        await self._session.start()
-                retried = time.monotonic()
-                try:
-                    return await asyncio.wait_for(fn(*args, **kwargs), timeout=budget)
-                except asyncio.TimeoutError as exc:
-                    raise _timeout_error(name, budget, time.monotonic() - retried, exc) from exc
+                if tab_id is not None:
+                    token = CALL_TAB.set(self._session.tab_for_call(tab_id))
+                result = await self._run_budgeted(fn, name, budget, args, kwargs)
+            except Exception as exc:
+                return error_result(exc)
+            finally:
+                if token is not None:
+                    CALL_TAB.reset(token)
+            if isinstance(result, Result):
+                return result.to_call_result()
+            return result
 
-        # Preserve the signature so FastMCP introspects the right schema, and drop
-        # __wrapped__ so it doesn't follow back to the unbound function (exposing `self`).
-        guarded.__signature__ = inspect.signature(fn)  # type: ignore[attr-defined]
+        guarded.__signature__ = sig  # type: ignore[attr-defined]
+        guarded.__annotations__ = hints
+        # functools.wraps sets __wrapped__, which inspect would follow back to the
+        # unbound method and expose `self` as a parameter.
         if hasattr(guarded, "__wrapped__"):
             delattr(guarded, "__wrapped__")
         guarded.__zendriver_timeout__ = budget  # type: ignore[attr-defined]
-        self._mcp.tool()(guarded)
+
+        doc = inspect.getdoc(fn) or ""
+        first = " ".join(doc.split("\n\n", 1)[0].split())
+        register(
+            ToolSpec(**{**spec.__dict__, "summary": first})  # frozen: rebuild with the summary
+        )
+        self._mcp.tool(title=title, annotations=spec.annotations())(guarded)
+
+    async def _run_budgeted(
+        self,
+        fn: "Callable[..., Coroutine[Any, Any, Any]]",
+        name: str,
+        budget: float,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """Run one call under its budget, recovering a dead or wedged browser."""
+        started = time.monotonic()
+        try:
+            return await asyncio.wait_for(fn(*args, **kwargs), timeout=budget)
+        except asyncio.TimeoutError as exc:
+            err = _timeout_error(name, budget, time.monotonic() - started, exc)
+            # A wedged Chrome shows up HERE and nowhere else. The recovery
+            # below only runs from `except Exception`, so a browser that hangs
+            # instead of exiting never reaches it: is_dead() is
+            # `browser.stopped`, and a hung process has not stopped. Measured
+            # 2026-09-02 -- a crashpad ptrace deadlock left the DevTools port
+            # accepting connections and answering nothing for 22 hours while
+            # every call returned this same timeout and nothing self-healed.
+            # Probing the endpoint is what tells "slow" from "gone".
+            if isinstance(err, ToolTimeoutError):
+                if await self._session.discard_if_unreachable():
+                    raise BrowserUnreachableError(name, budget, AUTOSTART_BROWSER) from exc
+            raise err from exc
+        except BrowserNotStartedError:
+            # Retried once, and only once: if the browser still is not there
+            # after a start, something is wrong with the launch and the
+            # caller needs to see that error rather than a loop.
+            if not AUTOSTART_BROWSER or name == "start_browser":
+                raise
+            async with _autostart_lock:
+                if not self._session.is_running():
+                    await self._session.start()
+            return await self._retry(fn, name, budget, args, kwargs)
+        except Exception:
+            # Chrome died underneath a live session — crash, OOM kill, a user
+            # closing the window. The session still holds a Browser object,
+            # so this arrives as a websocket error rather than
+            # BrowserNotStartedError, and every later call fails the same way
+            # until someone restarts it by hand.
+            #
+            # is_dead() is the whole guard: an ordinary tool failure with a
+            # healthy browser is re-raised untouched.
+            if not AUTOSTART_BROWSER or name == "start_browser":
+                raise
+            if not self._session.is_dead():
+                raise
+            async with _autostart_lock:
+                if self._session.is_dead():
+                    self._session.discard()
+                if not self._session.is_running():
+                    await self._session.start()
+            return await self._retry(fn, name, budget, args, kwargs)
+
+    async def _retry(
+        self,
+        fn: "Callable[..., Coroutine[Any, Any, Any]]",
+        name: str,
+        budget: float,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> Any:
+        retried = time.monotonic()
+        try:
+            return await asyncio.wait_for(fn(*args, **kwargs), timeout=budget)
+        except asyncio.TimeoutError as exc:
+            raise _timeout_error(name, budget, time.monotonic() - retried, exc) from exc
+
+    # ------------------------------------------------------------------
+    # shared state
 
     @property
     def session(self) -> BrowserSession:
@@ -222,63 +292,62 @@ class ToolBase(ABC):
         """get mcp server instance"""
         return self._mcp
 
-    @staticmethod
-    def escape_js_string(s: str) -> str:
-        """escape special characters for safe JavaScript string interpolation"""
-        return (
-            s.replace("\\", "\\\\")
-            .replace('"', '\\"')
-            .replace("'", "\\'")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
+    @property
+    def dom(self) -> Dom:
+        """Element helpers for the tab this call acts on (src/dom.py)."""
+        return dom_for(self._session.page)
+
+    # ------------------------------------------------------------------
+    # element access: always through src/dom.py, never by interpolating a
+    # selector into page JavaScript
+
+    async def resolve(self, selector: str) -> Handle:
+        """A CSS selector or a get_interaction_tree id, resolved to an element."""
+        return await self.dom.resolve(selector)
+
+    async def element_call(self, selector: "str | Handle", function: str, *args: Any) -> Any:
+        """Run ``function(el, ...args)`` on the element, in the isolated world.
+
+        Arguments travel as CDP values, so no string escaping is ever needed.
+        """
+        return await asyncio.wait_for(
+            self.dom.call(selector, function, *args), timeout=JS_TIMEOUT_SECONDS
         )
 
-    async def get_element(self, selector: str):
-        """get element by selector, raise error if not found"""
-        elem = await self._session.page.select(selector)
-        if elem is None:
-            raise ElementNotFoundError(selector)
-        return elem
+    async def handle_by_text(self, text: str) -> Handle:
+        """The best visible match for ``text``, found by zendriver's DOM search.
 
-    async def get_element_by_text(self, text: str):
-        """get element by text content, raise error if not found"""
+        zendriver searches with CDP's DOM.performSearch, which runs no page
+        JavaScript; the match is then re-resolved into our isolated world.
+        """
         elem = await self._session.page.find(text, best_match=True)
         if elem is None:
-            raise ElementNotFoundError(f"text='{text}'")
-        return elem
+            raise ElementNotFoundError(f"text={text!r}")
+        return await self.dom.handle_for_node(elem.backend_node_id, f"text={text!r}")
 
-    async def run_js(self, script: str, timeout: float = JS_TIMEOUT_SECONDS) -> Any:
-        """Execute JavaScript and return the result, refusing to hang forever.
+    async def run_js(
+        self,
+        script: str,
+        timeout: float = JS_TIMEOUT_SECONDS,
+        world: World = World.ISOLATED,
+    ) -> Any:
+        """Evaluate JavaScript and return its JSON value, refusing to hang forever.
+
+        Defaults to the isolated world: it sees the same DOM but not the page's
+        globals, and the page cannot see it. Pass ``World.MAIN`` only for code
+        that must read or change page globals.
 
         `page.evaluate()` can stop returning altogether. Observed on a real tab
         that had been left mid-navigation: `get_page_info` answered in 0.4s (it
         reads cached attributes and makes no CDP round trip) while
         `get_text_content` never came back at all, because every JS evaluation
-        against that tab hung. From the caller's side that is not an error, it is
-        silence — the MCP request times out and returns a parameter dump, which
-        says nothing about the browser and reads as a bad argument.
-
-        A bound turns that into a sentence naming the real problem. It has to
-        live here rather than in each tool: every JS-based tool shares the
-        failure, and the ones that need longer can ask for it.
+        against that tab hung. A bound turns that into a sentence naming the
+        real problem.
         """
         try:
-            return await asyncio.wait_for(self._session.page.evaluate(script), timeout=timeout)
+            return await asyncio.wait_for(self.dom.evaluate(script, world), timeout=timeout)
         except (TimeoutError, asyncio.TimeoutError) as exc:
             raise ToolTimeoutError("run_js", timeout) from exc
-
-    async def check_visibility(self, selector: str) -> dict:
-        """check if element exists and is visible"""
-        safe_sel = self.escape_js_string(selector)
-        return await self.run_js(f'''
-            (function() {{
-                const el = document.querySelector("{safe_sel}");
-                if (!el) return {{ found: false }};
-                const style = window.getComputedStyle(el);
-                const hidden = style.display === "none" || style.visibility === "hidden";
-                return {{ found: true, hidden: hidden, tag: el.tagName }};
-            }})()
-        ''')
 
     async def wait_for_condition(
         self, check_fn: Callable, timeout: float, poll_interval: float = 0.5
@@ -297,8 +366,3 @@ class ToolBase(ABC):
         if len(text) > max_length:
             return text[:max_length] + suffix
         return text
-
-    @staticmethod
-    def bool_to_yes_no(value: bool) -> str:
-        """convert boolean to Yes/No string"""
-        return "Yes" if value else "No"

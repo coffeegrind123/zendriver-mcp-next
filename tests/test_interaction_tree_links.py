@@ -23,12 +23,12 @@ from src.tools.content import ContentTools
 def _tools(tree):
     tools = ContentTools.__new__(ContentTools)
 
-    async def run_js(_script: str):
+    async def walk():
         # A fresh copy each call: the tool mutates what the walker returns, and a
         # test that shared one list would pass for the wrong reason.
         return json.loads(json.dumps(tree))
 
-    tools.run_js = run_js  # type: ignore[method-assign]
+    tools._walk = walk  # type: ignore[method-assign]
     return tools
 
 
@@ -40,7 +40,7 @@ TREE = [
 
 
 def test_off_by_default_costs_the_caller_nothing() -> None:
-    out = asyncio.run(_tools(TREE).get_interaction_tree())
+    out = asyncio.run(_tools(TREE).get_interaction_tree()).render()
     parsed = json.loads(out)
     assert all("h" not in element for element in parsed)
     # And the rest of the entry is untouched.
@@ -49,7 +49,7 @@ def test_off_by_default_costs_the_caller_nothing() -> None:
 
 
 def test_links_true_returns_the_targets() -> None:
-    parsed = json.loads(asyncio.run(_tools(TREE).get_interaction_tree(links=True)))
+    parsed = json.loads(asyncio.run(_tools(TREE).get_interaction_tree(links=True)).render())
     assert parsed[0]["h"] == "/2026/08/15/the-article/"
     assert parsed[1]["h"] == "https://other.example/"
     # A button has no target and must not grow one.
@@ -58,21 +58,24 @@ def test_links_true_returns_the_targets() -> None:
 
 def test_the_unlabelled_link_is_the_one_this_exists_for() -> None:
     # "[a]" is what the failing session saw. With links=true it is followable.
-    parsed = json.loads(asyncio.run(_tools(TREE).get_interaction_tree(links=True)))
+    parsed = json.loads(asyncio.run(_tools(TREE).get_interaction_tree(links=True)).render())
     unlabelled = next(e for e in parsed if e["l"] == "[a]")
     assert unlabelled["h"].endswith("/the-article/")
 
 
 def test_the_limit_still_applies_with_links_on() -> None:
-    out = asyncio.run(_tools(TREE).get_interaction_tree(limit=1, links=True))
+    result = asyncio.run(_tools(TREE).get_interaction_tree(limit=1, links=True))
+    out = result.render()
     assert out.startswith("[showing 1 of 3 elements")
     assert '"h"' in out
+    assert (result.total, result.truncated, len(result.elements)) == (3, True, 1)
 
 
 def test_a_non_dict_element_cannot_break_the_strip() -> None:
     # The walker is JS and validates nothing; a malformed entry must not throw
     # in the middle of returning a page.
-    out = asyncio.run(
+    result = asyncio.run(
         _tools([{"id": 1, "t": "link", "h": "/x"}, "junk", None]).get_interaction_tree()
     )
-    assert '"h"' not in out
+    assert '"h"' not in result.render()
+    assert result.total == 1

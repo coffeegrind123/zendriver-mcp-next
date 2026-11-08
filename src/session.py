@@ -2,11 +2,13 @@
 # Includes CDP event listeners for network and console logging.
 
 import asyncio
+import functools
 import logging
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -14,7 +16,13 @@ from urllib.parse import urlparse
 import zendriver as zd
 from zendriver import cdp
 
-from src.errors import BrowserNotStartedError, PageNotLoadedError
+from src import dom as _dom
+from src.errors import (
+    BrowserNotStartedError,
+    PageNotLoadedError,
+    TabForbiddenError,
+    TabNotFoundError,
+)
 from src.launch import (
     connection_max_tries,
     launch_budget,
@@ -35,12 +43,27 @@ BROWSER_CONNECTION_TIMEOUT = 1.0
 # whole budget, and the failure it looks for is not a slow answer but no answer.
 CDP_PROBE_TIMEOUT = 2.0
 
-__all__ = ["BrowserSession", "ResetCallback", "tool_timeout_budget"]
+__all__ = ["CALL_TAB", "CALLER", "BrowserSession", "ResetCallback", "tool_timeout_budget"]
+
+# The tab ONE tool call acts on, when it passed `tab=`. A ContextVar rather than
+# swapping the active tab: concurrent calls on different tabs (a shared HTTP
+# server, or a client that pipelines) each see their own, and the active tab
+# the user picked with switch_tab never moves under them.
+CALL_TAB: ContextVar["zd.Tab | None"] = ContextVar("zendriver_call_tab", default=None)
+
+# Who is calling, on a shared HTTP server with tokens: the token's id. None on
+# stdio (one client per process) and on an unauthenticated server. Tabs record
+# the caller that opened them, and one caller cannot reach another's tabs.
+CALLER: ContextVar[str | None] = ContextVar("zendriver_caller", default=None)
 
 # A reset callback is invoked on every stop_browser to clear any
 # session-bound state a tool was holding (interception handlers,
 # accessibility uid tables, trace buffers, screencast handles, ...).
 ResetCallback = Callable[[], None]
+
+# A request interceptor: answers a paused request and returns True, or returns
+# False to let the session continue it unchanged.
+Interceptor = Callable[[cdp.fetch.RequestPaused], Awaitable[bool]]
 
 
 async def _cdp_answers(host: str, port: int) -> bool:
@@ -76,6 +99,7 @@ class BrowserSession:
     _browser: zd.Browser | None = None
     _page: zd.Tab | None = None
     _tabs: dict[str, zd.Tab] = {}
+    _tab_owner: dict[str, str | None] = {}
     _tab_counter: int = 0
     _network_logs: list[dict[str, Any]] = []
     _console_logs: list[dict[str, Any]] = []
@@ -85,16 +109,23 @@ class BrowserSession:
     _proxy_password: str | None = None
     _loaded_extensions: list[dict[str, str]] = []
     _reset_callbacks: list[ResetCallback] = []
+    _tab_listeners: list[Callable[[], None]] = []
+    _interceptors: dict[int, "Interceptor"] = {}
+    _fetch_state: dict[int, tuple[bool | None, list[tuple[Any, Any]]]] = {}
 
     def __new__(cls) -> "BrowserSession":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._tabs = {}
+            cls._tab_owner = {}
             cls._network_logs = []
             cls._console_logs = []
             cls._pending_requests = {}
             cls._cdp_enabled_tabs = {}
             cls._reset_callbacks = []
+            cls._tab_listeners = []
+            cls._interceptors = {}
+            cls._fetch_state = {}
         return cls._instance
 
     def register_reset_callback(self, callback: ResetCallback) -> None:
@@ -207,6 +238,11 @@ class BrowserSession:
         self._browser = None
         self._page = None
         self._tabs = {}
+        self._tab_owner = {}
+        self._interceptors = {}
+        self._fetch_state = {}
+        _dom.forget()
+        self._tabs_changed()
         self._network_logs = []
         self._console_logs = []
         self._pending_requests = {}
@@ -216,7 +252,10 @@ class BrowserSession:
 
     @property
     def page(self) -> zd.Tab:
-        """Get the current page/tab."""
+        """The tab this call acts on: its ``tab=`` argument, else the active tab."""
+        override = CALL_TAB.get()
+        if override is not None:
+            return override
         if self._page is None:
             raise PageNotLoadedError()
         return self._page
@@ -451,6 +490,7 @@ class BrowserSession:
             self._console_logs = []
             self._pending_requests = {}
             self._tabs = {}
+            self._tab_owner = {}
             self._tab_counter = 0
 
             # Harden zendriver's Transaction.__call__ against parser/enum version skew so a
@@ -463,9 +503,8 @@ class BrowserSession:
             main_tab = self._browser.main_tab
             if main_tab:
                 self._page = main_tab
+                self._track(main_tab, CALLER.get())
                 await self._setup_cdp_listeners(main_tab)
-                self._tab_counter += 1
-                self._tabs[f"tab_{self._tab_counter}"] = main_tab
 
         return self._browser
 
@@ -476,6 +515,11 @@ class BrowserSession:
             self._browser = None
             self._page = None
             self._tabs = {}
+            self._tab_owner = {}
+            self._interceptors = {}
+            self._fetch_state = {}
+            _dom.forget()
+            self._tabs_changed()
             self._network_logs = []
             self._console_logs = []
             self._pending_requests = {}
@@ -496,24 +540,28 @@ class BrowserSession:
             # Enable Runtime domain for console
             await tab.send(cdp.runtime.enable())
 
-            # Enable Fetch domain for proxy auth if credentials are set
-            if self._proxy_username:
-                await tab.send(
-                    cdp.fetch.enable(
-                        handle_auth_requests=True,
-                        patterns=[cdp.fetch.RequestPattern(url_pattern="*")],
-                    )
-                )
-                if cdp.fetch not in tab.enabled_domains:
-                    tab.enabled_domains.append(cdp.fetch)
-                tab.add_handler(cdp.fetch.AuthRequired, self._on_fetch_auth_required)
-                tab.add_handler(cdp.fetch.RequestPaused, self._on_fetch_request_paused)
+            # Fetch for proxy auth, if credentials are set (and for request
+            # interception, which registers through set_request_interceptor).
+            await self._ensure_fetch(tab)
 
-            # Add event handlers
-            tab.add_handler(cdp.network.RequestWillBeSent, self._on_request_sent)
-            tab.add_handler(cdp.network.ResponseReceived, self._on_response_received)
-            tab.add_handler(cdp.network.LoadingFailed, self._on_loading_failed)
-            tab.add_handler(cdp.runtime.ConsoleAPICalled, self._on_console_api)
+            # Add event handlers, each bound to this tab's id so every log entry
+            # says which tab it came from. functools.partial of a coroutine
+            # function is still one to zendriver's dispatcher (it awaits it); a
+            # lambda would be run in a thread and its coroutine never awaited.
+            tid = self.tab_id_of(tab)
+            tab.add_handler(
+                cdp.network.RequestWillBeSent, functools.partial(self._on_request_sent, tab_id=tid)
+            )
+            tab.add_handler(
+                cdp.network.ResponseReceived,
+                functools.partial(self._on_response_received, tab_id=tid),
+            )
+            tab.add_handler(
+                cdp.network.LoadingFailed, functools.partial(self._on_loading_failed, tab_id=tid)
+            )
+            tab.add_handler(
+                cdp.runtime.ConsoleAPICalled, functools.partial(self._on_console_api, tab_id=tid)
+            )
 
             # Mark tab as CDP-enabled
             self._cdp_enabled_tabs[tab_id] = True
@@ -521,7 +569,9 @@ class BrowserSession:
             # CDP not available or failed, continue without logging
             pass
 
-    async def _on_request_sent(self, event: cdp.network.RequestWillBeSent) -> None:
+    async def _on_request_sent(
+        self, event: cdp.network.RequestWillBeSent, *, tab_id: str | None = None
+    ) -> None:
         """Handle outgoing network requests."""
         request_id = str(event.request_id)
         self._pending_requests[request_id] = {
@@ -529,9 +579,12 @@ class BrowserSession:
             "method": event.request.method,
             "timestamp": datetime.now().isoformat(),
             "type": str(event.type_) if event.type_ else "unknown",
+            "tab": tab_id,
         }
 
-    async def _on_response_received(self, event: cdp.network.ResponseReceived) -> None:
+    async def _on_response_received(
+        self, event: cdp.network.ResponseReceived, *, tab_id: str | None = None
+    ) -> None:
         """Handle network responses."""
         request_id = str(event.request_id)
         pending = self._pending_requests.pop(request_id, {})
@@ -544,6 +597,7 @@ class BrowserSession:
             "type": str(event.type_) if event.type_ else pending.get("type", "unknown"),
             "mime_type": event.response.mime_type,
             "timestamp": datetime.now().isoformat(),
+            "tab": tab_id,
         }
 
         self._network_logs.append(log_entry)
@@ -552,7 +606,9 @@ class BrowserSession:
         if len(self._network_logs) > 1000:
             self._network_logs = self._network_logs[-1000:]
 
-    async def _on_loading_failed(self, event: cdp.network.LoadingFailed) -> None:
+    async def _on_loading_failed(
+        self, event: cdp.network.LoadingFailed, *, tab_id: str | None = None
+    ) -> None:
         """Handle failed network requests."""
         request_id = str(event.request_id)
         pending = self._pending_requests.pop(request_id, {})
@@ -562,13 +618,18 @@ class BrowserSession:
                 "url": pending.get("url", "unknown"),
                 "method": pending.get("method", "GET"),
                 "status": 0,
-                "status_text": f"FAILED: {event.error_text}",
+                "status_text": f"FAILED: {event.error_text or event.blocked_reason or 'unknown'}",
+                "blocked_reason": str(event.blocked_reason.value) if event.blocked_reason else None,
+                "canceled": bool(event.canceled),
                 "type": pending.get("type", "unknown"),
                 "timestamp": datetime.now().isoformat(),
+                "tab": tab_id,
             }
             self._network_logs.append(log_entry)
 
-    async def _on_console_api(self, event: cdp.runtime.ConsoleAPICalled) -> None:
+    async def _on_console_api(
+        self, event: cdp.runtime.ConsoleAPICalled, *, tab_id: str | None = None
+    ) -> None:
         """Handle console API calls."""
         args_text = []
         for arg in event.args:
@@ -587,6 +648,7 @@ class BrowserSession:
             "type": str(event.type_),
             "text": " ".join(args_text),
             "timestamp": datetime.now().isoformat(),
+            "tab": tab_id,
         }
 
         self._console_logs.append(log_entry)
@@ -595,99 +657,238 @@ class BrowserSession:
         if len(self._console_logs) > 500:
             self._console_logs = self._console_logs[-500:]
 
+    # ------------------------------------------------------------------
+    # Fetch: one owner per tab
+    #
+    # Proxy authentication and request interception both need the Fetch domain,
+    # and a tab has exactly one Fetch configuration. Two independent owners
+    # each calling Fetch.enable and each answering RequestPaused meant every
+    # paused request was answered twice, and the later enable silently dropped
+    # the auth handling. So the session owns Fetch: interception registers a
+    # per-tab interceptor, and the one RequestPaused handler asks it first.
+
+    async def set_request_interceptor(self, tab: zd.Tab, interceptor: Interceptor | None) -> None:
+        """Install (or remove, with None) the request interceptor for one tab.
+
+        The interceptor gets every paused request on that tab and returns True
+        when it answered it; otherwise the session continues it unchanged.
+        """
+        key = id(tab)
+        if interceptor is None:
+            self._interceptors.pop(key, None)
+        else:
+            self._interceptors[key] = interceptor
+        await self._ensure_fetch(tab)
+
+    async def _ensure_fetch(self, tab: zd.Tab) -> None:
+        key = id(tab)
+        want_auth = bool(self._proxy_username)
+        wanted = want_auth or key in self._interceptors
+        state = self._fetch_state.get(key)
+        if not wanted:
+            if state is not None:
+                for event_type, handler in state[1]:
+                    handlers = tab.handlers.get(event_type)
+                    if handlers and handler in handlers:
+                        handlers.remove(handler)
+                self._fetch_state.pop(key, None)
+                try:
+                    await tab.send(cdp.fetch.disable())
+                except Exception:
+                    pass  # tab already gone
+            return
+        if state is None:
+            hooks = [
+                (
+                    cdp.fetch.RequestPaused,
+                    functools.partial(self._on_fetch_request_paused, tab=tab),
+                ),
+                (cdp.fetch.AuthRequired, functools.partial(self._on_fetch_auth_required, tab=tab)),
+            ]
+            for event_type, handler in hooks:
+                tab.add_handler(event_type, handler)
+            domains = getattr(tab, "enabled_domains", None)
+            if domains is not None and cdp.fetch not in domains:
+                domains.append(cdp.fetch)
+            state = (None, hooks)
+        if state[0] != want_auth:
+            # Re-enabling replaces the configuration, so the auth flag follows
+            # the proxy without losing interception (or the other way round).
+            await tab.send(
+                cdp.fetch.enable(
+                    handle_auth_requests=want_auth,
+                    patterns=[cdp.fetch.RequestPattern(url_pattern="*")],
+                )
+            )
+        self._fetch_state[key] = (want_auth, state[1])
+
     async def _on_fetch_request_paused(
-        self, event: cdp.fetch.RequestPaused, connection=None
+        self, event: cdp.fetch.RequestPaused, *, tab: zd.Tab
     ) -> None:
-        """Continue paused requests (non-auth). Required when Fetch patterns are active."""
+        """Answer a paused request on the tab that paused it, exactly once."""
+        interceptor = self._interceptors.get(id(tab))
         try:
-            target = connection or self._page
-            if target:
-                await target.send(cdp.fetch.continue_request(request_id=event.request_id))
+            if interceptor is not None and await interceptor(event):
+                return
+            await tab.send(cdp.fetch.continue_request(request_id=event.request_id))
+        except Exception:
+            pass  # tab closed or browser stopped mid-request
+
+    async def _on_fetch_auth_required(self, event: cdp.fetch.AuthRequired, *, tab: zd.Tab) -> None:
+        """Answer a proxy authentication challenge."""
+        try:
+            if self._proxy_username:
+                response = cdp.fetch.AuthChallengeResponse(
+                    response="ProvideCredentials",
+                    username=self._proxy_username,
+                    password=self._proxy_password or "",
+                )
+            else:
+                response = cdp.fetch.AuthChallengeResponse(response="Default")
+            await tab.send(
+                cdp.fetch.continue_with_auth(
+                    request_id=event.request_id, auth_challenge_response=response
+                )
+            )
         except Exception:
             pass
 
-    async def _on_fetch_auth_required(self, event: cdp.fetch.AuthRequired, connection=None) -> None:
-        """Handle proxy authentication challenges."""
-        try:
-            target = connection or self._page
-            if target and self._proxy_username:
-                await target.send(
-                    cdp.fetch.continue_with_auth(
-                        request_id=event.request_id,
-                        auth_challenge_response=cdp.fetch.AuthChallengeResponse(
-                            response="ProvideCredentials",
-                            username=self._proxy_username,
-                            password=self._proxy_password or "",
-                        ),
-                    )
-                )
-        except Exception:
-            pass
+    # ------------------------------------------------------------------
+    # tabs
+    #
+    # Ids are "tab_<n>", handed out once and never reused. Tabs the PAGE opens
+    # (target=_blank, window.open) get ids too, on the next look at the tab
+    # list, and inherit the owner of the tab that opened them.
+
+    def _track(self, tab: zd.Tab, owner: str | None) -> str:
+        for tid, t in self._tabs.items():
+            if t is tab:
+                return tid
+        self._tab_counter += 1
+        tid = f"tab_{self._tab_counter}"
+        self._tabs[tid] = tab
+        self._tab_owner[tid] = owner
+        self._tabs_changed()
+        return tid
+
+    def add_tab_listener(self, listener: Callable[[], None]) -> None:
+        """Called (synchronously) whenever the set of open tabs changes."""
+        if listener not in self._tab_listeners:
+            self._tab_listeners.append(listener)
+
+    def _tabs_changed(self) -> None:
+        for listener in self._tab_listeners:
+            try:
+                listener()
+            except Exception:
+                logger.exception("tab listener failed: %r", listener)
+
+    def tab_id_of(self, tab: zd.Tab) -> str | None:
+        for tid, t in self._tabs.items():
+            if t is tab:
+                return tid
+        return None
+
+    def _sync_tabs(self) -> None:
+        """Adopt tabs the page opened, and forget tabs that were closed."""
+        if self._browser is None:
+            return
+        live = list(self._browser.tabs)
+        for tid in [tid for tid, t in self._tabs.items() if t not in live]:
+            gone = self._tabs.pop(tid)
+            self._tab_owner.pop(tid, None)
+            _dom.forget(gone)
+            if self._page is gone:
+                self._page = None
+            self._tabs_changed()
+        by_target = {getattr(t.target, "target_id", None): tid for tid, t in self._tabs.items()}
+        for tab in live:
+            if self.tab_id_of(tab) is not None:
+                continue
+            opener = getattr(tab.target, "opener_id", None)
+            parent = by_target.get(opener)
+            owner = self._tab_owner.get(parent) if parent else CALLER.get()
+            self._track(tab, owner)
+
+    def _visible(self, tab_id: str) -> bool:
+        caller = CALLER.get()
+        owner = self._tab_owner.get(tab_id)
+        return caller is None or owner is None or owner == caller
+
+    def tab_for_call(self, tab_id: str) -> zd.Tab:
+        """Resolve a ``tab=`` argument, enforcing ownership on shared servers."""
+        self._sync_tabs()
+        tab = self._tabs.get(tab_id)
+        if tab is None:
+            raise TabNotFoundError(tab_id, [t for t in self._tabs if self._visible(t)])
+        if not self._visible(tab_id):
+            raise TabForbiddenError(tab_id)
+        return tab
 
     async def navigate(self, url: str, new_tab: bool = False) -> zd.Tab:
-        """Navigate to a URL."""
+        """Navigate the call's tab to a URL, or open it in a new tab."""
         browser = self.browser
-        if new_tab or self._page is None:
-            self._page = await browser.get(url, new_tab=new_tab)
-            # Set up CDP listeners for the new tab
-            await self._setup_cdp_listeners(self._page)
-            # Track the tab
-            self._tab_counter += 1
-            tab_id = f"tab_{self._tab_counter}"
-            self._tabs[tab_id] = self._page
-        else:
-            # Check if CDP listeners need to be set up for existing page
-            if not self._cdp_enabled_tabs.get(id(self._page)):
-                await self._setup_cdp_listeners(self._page)
-            await self._page.get(url)
-        return self._page
+        current = CALL_TAB.get() or self._page
+        if new_tab or current is None:
+            # Blank first, listeners, THEN the URL: listeners attached after
+            # the load miss the document request itself.
+            tab = await browser.get("about:blank", new_tab=new_tab)
+            self._track(tab, CALLER.get())
+            await self._setup_cdp_listeners(tab)
+            await tab.get(url)
+            if CALL_TAB.get() is None:
+                self._page = tab
+            return tab
+        if not self._cdp_enabled_tabs.get(id(current)):
+            await self._setup_cdp_listeners(current)
+        await current.get(url)
+        return current
 
     async def create_tab(self, url: str | None = None) -> tuple[str, zd.Tab]:
         """Create a new tab and return its ID."""
         browser = self.browser
-        if url:
-            tab = await browser.get(url, new_tab=True)
-        else:
-            tab = await browser.get("about:blank", new_tab=True)
-
-        # Set up CDP listeners for the new tab
+        # Blank first so the listeners see the page's own document request.
+        tab = await browser.get("about:blank", new_tab=True)
+        tab_id = self._track(tab, CALLER.get())
         await self._setup_cdp_listeners(tab)
-
-        self._tab_counter += 1
-        tab_id = f"tab_{self._tab_counter}"
-        self._tabs[tab_id] = tab
+        if url:
+            await tab.get(url)
         return tab_id, tab
 
     async def switch_tab(self, tab_id: str) -> zd.Tab:
-        """Switch to a specific tab."""
-        if tab_id not in self._tabs:
-            raise ValueError(f"Tab not found: {tab_id}")
-        self._page = self._tabs[tab_id]
-        await self._page.bring_to_front()
-        return self._page
+        """Make a tab the active one."""
+        tab = self.tab_for_call(tab_id)
+        self._page = tab
+        await tab.bring_to_front()
+        return tab
 
     async def close_tab(self, tab_id: str) -> None:
         """Close a specific tab."""
-        if tab_id not in self._tabs:
-            raise ValueError(f"Tab not found: {tab_id}")
-        tab = self._tabs[tab_id]
+        tab = self.tab_for_call(tab_id)
         await tab.close()
         del self._tabs[tab_id]
+        self._tab_owner.pop(tab_id, None)
+        self._cdp_enabled_tabs.pop(id(tab), None)
+        _dom.forget(tab)
+        self._tabs_changed()
 
-        # If closed tab was current, switch to another
-        if self._page == tab:
-            if self._tabs:
-                self._page = list(self._tabs.values())[0]
-            else:
-                self._page = None
+        # If closed tab was current, switch to another this caller can see
+        if self._page is tab:
+            visible = [t for tid, t in self._tabs.items() if self._visible(tid)]
+            self._page = visible[0] if visible else None
 
     def get_all_tabs(self) -> dict[str, str]:
-        """Get all open tabs with their URLs."""
+        """Open tabs this caller can see, with their URLs."""
+        self._sync_tabs()
         result = {}
         for tab_id, tab in self._tabs.items():
-            url = getattr(tab, "url", "unknown")
-            result[tab_id] = url
+            if self._visible(tab_id):
+                result[tab_id] = getattr(tab, "url", "unknown")
         return result
+
+    def active_tab_id(self) -> str | None:
+        page = CALL_TAB.get() or self._page
+        return self.tab_id_of(page) if page is not None else None
 
     async def wait_for_document_ready(self, timeout: float = 10.0) -> tuple[bool, float]:
         """Block until the document reports `readyState == "complete"`.

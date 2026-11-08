@@ -7,9 +7,15 @@ microphone, notifications, clipboard. Avoids agents getting stuck on a
 
 from __future__ import annotations
 
+from typing import Annotated
+
+from pydantic import Field
 from zendriver import cdp
 
-from src.errors import ZendriverMCPError
+from src.errors import Code, InvalidArgumentError, ZendriverMCPError
+from src.registry import Effect
+from src.response import Result
+from src.suggest import did_you_mean
 from src.tools.base import ToolBase
 
 # The full enum has 30+ entries; these are the ones agents care about.
@@ -27,20 +33,69 @@ _COMMON_PERMISSIONS = {
 }
 
 
+class GrantResult(Result):
+    granted: list[str] = Field(description="CDP permission names granted.")
+    origin: str | None = Field(default=None, description="Origin granted to; null = all origins.")
+
+
+class PermissionNames(Result):
+    names: list[str] = Field(description="Short names grant_permissions accepts.")
+
+
+def _connection(session):  # type: ignore[no-untyped-def]
+    connection = session.browser.connection
+    if connection is None:
+        raise ZendriverMCPError(
+            "Browser has no active connection.",
+            code=Code.BROWSER_UNREACHABLE,
+            hint="Call start_browser for a fresh browser.",
+        )
+    return connection
+
+
 class PermissionsTools(ToolBase):
     """Grant or reset browser permissions for an origin."""
 
+    GROUP = "permissions"
+
     def _register_tools(self) -> None:
-        self._register(self.grant_permissions)
-        self._register(self.reset_permissions)
-        self._register(self.list_permission_names)
+        self._register(
+            self.grant_permissions,
+            Effect.WRITE,
+            "Grant permissions",
+            idempotent=True,
+            page_scoped=False,
+        )
+        self._register(
+            self.reset_permissions,
+            Effect.WRITE,
+            "Reset permissions",
+            idempotent=True,
+            page_scoped=False,
+        )
+        self._register(
+            self.list_permission_names, Effect.READ, "List permission names", page_scoped=False
+        )
 
-    async def grant_permissions(self, permissions: list[str], origin: str | None = None) -> str:
-        """Grant ``permissions`` to ``origin`` (or all origins if omitted).
+    async def grant_permissions(
+        self,
+        permissions: Annotated[
+            list[str],
+            Field(
+                description="Permission names from list_permission_names, or CDP enum names (VIDEO_CAPTURE / videoCapture). Example: ['geolocation', 'notifications']"
+            ),
+        ],
+        origin: Annotated[
+            str | None,
+            Field(
+                description="Origin to grant to, scheme and host. Omit for every origin. Example: 'https://example.com'"
+            ),
+        ] = None,
+    ) -> GrantResult:
+        """Pre-grant browser permissions so the page never shows a permission prompt.
 
-        Accepted names are listed by ``list_permission_names``. Any name
-        that resolves to a full CDP enum key is also accepted (e.g.
-        ``VIDEO_CAPTURE`` or ``videoCapture``).
+        Browser-wide (the default browser context), not per tab. Undo with
+        reset_permissions. Returns what was granted and to which origin.
         """
         resolved: list[cdp.browser.PermissionType] = []
         unknown: list[str] = []
@@ -55,23 +110,28 @@ class PermissionsTools(ToolBase):
                 unknown.append(name)
 
         if unknown:
-            raise ZendriverMCPError(f"Unknown permissions: {unknown}. Try list_permission_names().")
+            hints = [h for h in (did_you_mean(u, list(_COMMON_PERMISSIONS)) for u in unknown) if h]
+            raise InvalidArgumentError(
+                f"Unknown permissions: {unknown}",
+                hint=" ".join(hints) or "See list_permission_names for accepted names.",
+            )
 
-        connection = self.session.browser.connection
-        if connection is None:
-            raise ZendriverMCPError("Browser has no active connection")
-        await connection.send(cdp.browser.grant_permissions(permissions=resolved, origin=origin))
+        await _connection(self.session).send(
+            cdp.browser.grant_permissions(permissions=resolved, origin=origin)
+        )
         scope = origin or "all origins"
-        return f"Granted {len(resolved)} permission(s) to {scope}"
+        return GrantResult(
+            summary=f"Granted {len(resolved)} permission(s) to {scope}",
+            granted=[r.value for r in resolved],
+            origin=origin,
+        )
 
-    async def reset_permissions(self) -> str:
-        """Reset every permission override in the current browser context."""
-        connection = self.session.browser.connection
-        if connection is None:
-            raise ZendriverMCPError("Browser has no active connection")
-        await connection.send(cdp.browser.reset_permissions())
-        return "Permissions reset to defaults"
+    async def reset_permissions(self) -> Result:
+        """Reset every permission override in the browser context to Chrome's defaults."""
+        await _connection(self.session).send(cdp.browser.reset_permissions())
+        return Result(summary="Permissions reset to defaults")
 
-    async def list_permission_names(self) -> list[str]:
-        """Return the short permission names we accept in ``grant_permissions``."""
-        return sorted(_COMMON_PERMISSIONS.keys())
+    async def list_permission_names(self) -> PermissionNames:
+        """List the short permission names grant_permissions accepts."""
+        names = sorted(_COMMON_PERMISSIONS.keys())
+        return PermissionNames(summary="Permissions: " + ", ".join(names), names=names)

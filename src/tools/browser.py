@@ -1,20 +1,42 @@
 # browser lifecycle tools - start, stop, status
 from typing import Annotated
 
-from pydantic import Field
+from pydantic import BaseModel, Field
 
+from src.errors import InvalidArgumentError
 from src.launch import HEADED_ONLY_NOTE
+from src.registry import Effect
+from src.response import Result
 from src.tools.base import ToolBase
+
+
+class TabInfo(BaseModel):
+    id: str = Field(description="Tab id, as tools' `tab` argument and switch_tab take it.")
+    url: str = Field(description="The tab's current URL.")
+    active: bool = Field(description="Whether this is the active tab.")
+
+
+class StartResult(Result):
+    mode: str = Field(description="Always 'headed'.")
+    options: list[str] = Field(description="Options applied, e.g. 'proxy=...'.")
+    headless_ignored: bool = Field(description="True when headless was requested and refused.")
+
+
+class StatusResult(Result):
+    running: bool = Field(description="Whether a browser is open.")
+    tabs: list[TabInfo] = Field(description="Open tabs this client can see.")
 
 
 class BrowserTools(ToolBase):
     """tools for browser lifecycle management"""
 
+    GROUP = "browser"
+
     def _register_tools(self) -> None:
         """register browser lifecycle tools"""
-        self._register(self.start_browser)
-        self._register(self.stop_browser)
-        self._register(self.get_browser_status)
+        self._register(self.start_browser, Effect.WRITE, "Start browser", page_scoped=False)
+        self._register(self.stop_browser, Effect.DESTRUCTIVE, "Stop browser", page_scoped=False)
+        self._register(self.get_browser_status, Effect.READ, "Browser status", page_scoped=False)
 
     async def start_browser(
         self,
@@ -54,7 +76,7 @@ class BrowserTools(ToolBase):
                 description="Device pixel ratio, for retina-quality captures. The screenshot is window_size * device_scale_factor pixels. Example: 2"
             ),
         ] = None,
-    ) -> str:
+    ) -> StartResult:
         """Launch the browser and start a session. Required before every other tool.
 
         Every other tool in this server operates on the browser this starts, and
@@ -68,7 +90,7 @@ class BrowserTools(ToolBase):
             try:
                 browser_args.append(f"--window-size={int(w.strip())},{int(h.strip())}")
             except ValueError as exc:
-                raise ValueError(
+                raise InvalidArgumentError(
                     f"Invalid window_size {window_size!r}; expected 'WIDTHxHEIGHT' (e.g. '1440x900')"
                 ) from exc
         if device_scale_factor:
@@ -100,9 +122,14 @@ class BrowserTools(ToolBase):
             extras.append(f"scale={device_scale_factor}")
         extra_info = f" ({', '.join(extras)})" if extras else ""
         override = f" — {HEADED_ONLY_NOTE}" if headless else ""
-        return f"Browser started in {mode} mode{extra_info}{override}"
+        return StartResult(
+            summary=f"Browser started in {mode} mode{extra_info}{override}",
+            mode=mode,
+            options=extras,
+            headless_ignored=bool(headless),
+        )
 
-    async def stop_browser(self) -> str:
+    async def stop_browser(self) -> Result:
         """Stop the browser, close every tab, and release all session resources.
 
         Call when finished, or before start_browser to relaunch with different
@@ -110,21 +137,22 @@ class BrowserTools(ToolBase):
         confirmation string.
         """
         await self.session.stop()
-        return "Browser stopped and all resources cleaned up"
+        return Result(summary="Browser stopped and all resources cleaned up")
 
-    async def get_browser_status(self) -> str:
+    async def get_browser_status(self) -> StatusResult:
         """Check whether the browser is running, and list its open tabs.
 
         Use to decide whether start_browser is still needed, or to recover tab ids
-        after losing track. Returns 'Browser: Not started', or 'Browser: Running'
-        followed by the tab count and one '  - <tab_id>: <url>' line per tab.
+        after losing track. Returns whether it is running and every open tab
+        with its id, URL and whether it is the active one.
         """
         if not self.session.is_browser_started():
-            return "Browser: Not started"
+            return StatusResult(summary="Browser: Not started", running=False, tabs=[])
 
-        # list all open tabs
         tabs = self.session.get_all_tabs()
-        lines = ["Browser: Running", f"Open tabs: {len(tabs)}"]
-        for tab_id, url in tabs.items():
-            lines.append(f"  - {tab_id}: {url}")
-        return "\n".join(lines)
+        active = self.session.active_tab_id()
+        return StatusResult(
+            summary=f"Browser: Running, {len(tabs)} tab(s), active {active}",
+            running=True,
+            tabs=[TabInfo(id=t, url=u, active=t == active) for t, u in tabs.items()],
+        )

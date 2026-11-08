@@ -1,6 +1,6 @@
 [project]
-name = "zendriver-mcp"
-version = "0.4.0"
+name = "zendriver-mcp-next"
+version = "0.5.0"
 description = "Undetectable browser automation MCP server for LLM agents, with a search gateway and 98 tools."
 readme = "README.md"
 requires-python = ">=3.10"

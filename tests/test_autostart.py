@@ -16,10 +16,18 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Registers one tool through ToolBase._register, then calls it on a cold session.
 HARNESS = """
 import asyncio, json
-from src.errors import BrowserNotStartedError
 from src.session import BrowserSession
 from src.tools.base import ToolBase
+from src.registry import Effect
+from src.response import Result
 from mcp.server.mcpserver import MCPServer as FastMCP
+
+def unwrap(res):
+    # Tools return a CallToolResult; failures are isError with {error, code}.
+    if res.is_error:
+        sc = res.structured_content
+        return f"RAISED:{sc['code']}:{sc['error']}"
+    return res.structured_content["summary"]
 
 starts = []
 session = BrowserSession.get_instance()
@@ -33,20 +41,17 @@ session.start = fake_start           # instance attribute wins over the class
 
 class Probe(ToolBase):
     def _register_tools(self):
-        self._register(self.needs_browser)
+        self._register(self.needs_browser, Effect.READ, "Probe", page_scoped=False)
 
-    async def needs_browser(self) -> str:
+    async def needs_browser(self) -> Result:
         _ = self._session.browser     # raises BrowserNotStartedError when cold
-        return "ok"
+        return Result(summary="ok")
 
 mcp = FastMCP("test")
 probe = Probe(mcp)
 
 async def main():
-    try:
-        out = await mcp._tool_manager._tools["needs_browser"].fn()
-    except BrowserNotStartedError as e:
-        out = f"RAISED:{e}"
+    out = unwrap(await mcp._tool_manager._tools["needs_browser"].fn())
     print(json.dumps({"out": out, "starts": len(starts)}))
 
 asyncio.run(main())
@@ -65,7 +70,7 @@ def _run(**env_extra: str) -> dict:
 
 def test_off_by_default_the_error_still_reaches_the_caller() -> None:
     result = _run()
-    assert result["out"].startswith("RAISED:Browser not started"), result
+    assert result["out"].startswith("RAISED:browser_not_started:Browser not started"), result
     assert result["starts"] == 0
 
 
@@ -79,7 +84,16 @@ DEAD_HARNESS = """
 import asyncio, json
 from src.session import BrowserSession
 from src.tools.base import ToolBase
+from src.registry import Effect
+from src.response import Result
 from mcp.server.mcpserver import MCPServer as FastMCP
+
+def unwrap(res):
+    # Tools return a CallToolResult; failures are isError with {error, code}.
+    if res.is_error:
+        sc = res.structured_content
+        return f"RAISED:{sc['code']}:{sc['error']}"
+    return res.structured_content["summary"]
 
 starts = []
 session = BrowserSession.get_instance()
@@ -102,23 +116,20 @@ calls = []
 
 class Probe(ToolBase):
     def _register_tools(self):
-        self._register(self.needs_live_browser)
+        self._register(self.needs_live_browser, Effect.READ, "Probe", page_scoped=False)
 
-    async def needs_live_browser(self) -> str:
+    async def needs_live_browser(self) -> Result:
         calls.append(1)
         # The real failure mode: a websocket error, not BrowserNotStartedError.
         if getattr(self._session._browser, "stopped", False):
             raise RuntimeError("no close frame received or sent")
-        return "ok"
+        return Result(summary="ok")
 
 mcp = FastMCP("test")
 probe = Probe(mcp)
 
 async def main():
-    try:
-        out = await mcp._tool_manager._tools["needs_live_browser"].fn()
-    except Exception as e:
-        out = f"RAISED:{type(e).__name__}:{e}"
+    out = unwrap(await mcp._tool_manager._tools["needs_live_browser"].fn())
     print(json.dumps({"out": out, "starts": len(starts), "calls": len(calls)}))
 
 asyncio.run(main())
@@ -145,7 +156,7 @@ def test_a_dead_chrome_is_replaced_and_the_call_retried() -> None:
 
 def test_a_dead_chrome_is_left_alone_when_autostart_is_off() -> None:
     result = _run_source(DEAD_HARNESS)
-    assert result["out"].startswith("RAISED:RuntimeError:no close frame"), result
+    assert result["out"].startswith("RAISED:internal:RuntimeError: no close frame"), result
     assert result["starts"] == 0, result
 
 
@@ -157,5 +168,5 @@ def test_start_browser_itself_is_never_auto_started() -> None:
     import json
 
     result = json.loads(raw.strip().splitlines()[-1])
-    assert result["out"].startswith("RAISED:Browser not started"), result
+    assert result["out"].startswith("RAISED:browser_not_started:Browser not started"), result
     assert result["starts"] == 0, result

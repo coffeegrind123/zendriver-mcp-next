@@ -123,12 +123,13 @@ def test_the_error_names_the_wedge_rather_than_the_clock() -> None:
     text = str(err)
     assert "stopped answering" in text
     assert "wedged" in text
-    assert "The next call starts a fresh one." in text
+    # What to do next is the hint, which the client shows with the message.
+    assert err.hint == "The next call starts a fresh browser."
     # And it is NOT the message that said nothing useful for 22 hours.
     assert "exceeded its" not in text
 
-    manual = str(BrowserUnreachableError("navigate", 25.0, will_autostart=False))
-    assert "Call start_browser" in manual
+    manual = BrowserUnreachableError("navigate", 25.0, will_autostart=False)
+    assert "Call start_browser" in (manual.hint or "")
 
 
 # --- pytest entry points (no pytest-asyncio in this repo) ---

@@ -131,6 +131,7 @@ async def human_click(
             y=target.y,
             button=cdp.input_.MouseButton.LEFT,
             click_count=1,
+            buttons=1,  # MouseEvent.buttons while held; a real press reports it
         )
     )
     # Hold - a real click is ~60-120ms.
@@ -142,6 +143,7 @@ async def human_click(
             y=target.y,
             button=cdp.input_.MouseButton.LEFT,
             click_count=1,
+            buttons=0,
         )
     )
 
