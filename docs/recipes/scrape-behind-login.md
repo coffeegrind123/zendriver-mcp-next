@@ -1,35 +1,36 @@
-# Recipe: scrape behind a login, once
+# Log in once, then reuse the session
 
-The usual pain point: you need data from a site that requires auth, the login
-is annoying or uses 2FA, and you don't want to script it. Do it by hand once,
-then reuse the cookies on every subsequent run.
+When a login involves 2FA or a CAPTCHA, let a person do it once in the visible browser.
+Save the cookies, and every later run starts already signed in.
 
-## First run - log in, save
+## First run: log in and save
 
-```python
-await start_browser()  # headed, always — the human needs to see the form
-await navigate("https://example.com/login")
-# ... user types credentials, solves 2FA, clicks submit ...
-await wait_for_element("#dashboard", timeout=120)
-await export_cookies("~/.sessions/example.json")
-await stop_browser()
+```text
+start_browser {}
+navigate {"url": "https://example.com/login"}
+# a person signs in in the browser window, including any 2FA
+wait_for_element {"selector": "#dashboard", "timeout": 120}
+call_tool export_cookies {"file_path": "~/.sessions/example.json"}
+→ {"count": 23, "files": [{"path": "/home/me/.sessions/example.json", "uri": "browser://artifacts/example.json", ...}]}
 ```
 
-The JSON file now holds every cookie Chrome knows about for that domain,
-including HTTP-only session tokens.
+The export covers the whole browser cookie jar, HttpOnly session cookies included. The
+file is written with mode 0600.
 
-## Subsequent runs - reuse
+Alternatively, `start_browser {"user_data_dir": "/path/to/profile"}` keeps a complete
+persistent profile with cookies, storage and saved logins.
 
-```python
-await start_browser()  # headed here too; the server has no headless mode
-await import_cookies("~/.sessions/example.json")
-await navigate("https://example.com/dashboard")
-# already logged in
-data = await get_content()
+## Later runs: reuse
+
+```text
+start_browser {}
+call_tool import_cookies {"file_path": "~/.sessions/example.json"}
+navigate {"url": "https://example.com/dashboard"}
+get_text_content {}
 ```
 
-## When it breaks
+## When it stops working
 
-Cookies do expire. Catch 401s from `get_network_logs()` or just re-run the
-first recipe. For very long sessions, consider exporting again after each
-run so the most recent refresh token gets persisted.
+Cookies expire, and Chrome caps any cookie's lifetime at 400 days. Watch for 401 responses
+in `get_network_logs`, then repeat the first run. Exporting again at the end of each run
+keeps the latest refreshed session.

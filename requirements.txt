@@ -1,4 +1,6 @@
-zendriver>=0.14.0
+zendriver>=0.17
 asyncio-atexit>=1.0
 mcp>=2.3,<3
 Pillow>=10.0.0
+starlette>=0.27
+uvicorn>=0.31.1

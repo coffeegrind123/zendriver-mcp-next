@@ -1,7 +1,7 @@
-site_name: Zendriver-MCP
-site_description: Undetectable browser automation MCP server for LLM agents — a search gateway, profiles, and 98 tools.
-repo_url: https://github.com/coffeegrind123/Zendriver-MCP-fork
-repo_name: coffeegrind123/Zendriver-MCP-fork
+site_name: Zendriver MCP
+site_description: An MCP server that gives AI agents a real, headed Chrome that pages cannot tell is automated.
+repo_url: https://github.com/coffeegrind123/zendriver-mcp-next
+repo_name: coffeegrind123/zendriver-mcp-next
 edit_uri: edit/main/docs/
 
 theme:
@@ -45,9 +45,10 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Context optimization: optimization.md
+  - Tool reference: tools.md
+  - Architecture: architecture.md
   - Recipes:
-      - Beat Cloudflare: recipes/beat-cloudflare.md
-      - Mock API responses: recipes/mock-api-responses.md
-      - Performance audit: recipes/performance-audit.md
-      - Scrape behind a login: recipes/scrape-behind-login.md
+      - Get past a Cloudflare challenge: recipes/beat-cloudflare.md
+      - Mock an API response: recipes/mock-api-responses.md
+      - Audit a page behind a login: recipes/performance-audit.md
+      - Log in once, reuse the session: recipes/scrape-behind-login.md

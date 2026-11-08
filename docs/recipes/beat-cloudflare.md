@@ -1,23 +1,23 @@
-# Recipe: get past a Cloudflare Turnstile challenge
+# Get past a Cloudflare challenge
 
-Zendriver's fingerprint usually sails through Cloudflare. When it doesn't -
-typically on the interactive Turnstile checkbox - use the solver.
+A headed Chrome with trusted input usually passes Cloudflare without help. When an
+interactive Turnstile checkbox does appear, check for it first and then solve it.
 
-```python
-await start_browser()
-await navigate("https://a-cloudflare-protected-site.example")
-
-if await is_cloudflare_challenge_present(timeout=5):
-    await bypass_cloudflare(timeout=20, click_delay=4)
-
-# page is now visible
+```text
+navigate                        {"url": "https://protected.example"}
+call_tool is_cloudflare_challenge_present   {"timeout": 5}
+→ {"present": true, ...}
+call_tool bypass_cloudflare     {"timeout": 20, "click_delay": 4}
+→ {"solved": true, "attempts": 1, "elapsed": 6.2}
 ```
+
+`bypass_cloudflare` reports progress for each attempt. Run it through
+`jobs(action="start")` if your client's request timeout is shorter than the challenge.
 
 ## Tips
 
-- **Don't call `bypass_cloudflare` when there's no challenge.** It will wait
-  the full `timeout` and then raise. Always probe first.
-- **`click_delay` too small looks like a bot.** 3-5 seconds is realistic; the
-  default is 5.
-- **Still blocked?** The challenge isn't the only thing Cloudflare watches.
-  IP reputation matters - try a residential proxy.
+- **Don't call the solver when there is no challenge.** It waits the whole `timeout` and
+  then fails with `challenge_unsolved`. Check first.
+- **Keep `click_delay` realistic.** 3 to 5 seconds looks like a person reading the page.
+- **Still blocked?** The challenge is only one signal. IP reputation matters too, so try
+  `configure_proxy` with a residential exit.

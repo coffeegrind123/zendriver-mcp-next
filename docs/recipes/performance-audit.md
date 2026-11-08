@@ -1,35 +1,34 @@
-# Recipe: performance audit of an authenticated flow
+# Audit a page behind a login
 
-Lighthouse audits are great for unauthenticated landing pages but painful for
-pages behind a login. Drive the flow with zendriver-mcp, then point Lighthouse
-at the already-authenticated browser.
+Lighthouse normally audits a page as a stranger would see it. To audit a logged-in page,
+reuse the session's cookies, then run Lighthouse as a background job. An audit takes a
+minute or more, so this keeps it inside your client's request timeout.
 
-```python
-await start_browser()
-await import_cookies("~/.sessions/example.json")
-await navigate("https://example.com/dashboard")
-
-# Lighthouse audit on the exact URL we landed on, with the session live
-report = await run_lighthouse(
-    url="https://example.com/dashboard",
-    form_factor="mobile",
-    categories=["performance", "accessibility"],
-)
-print(report["scores"])  # {"performance": 74, "accessibility": 92}
-print(report["report_path"])  # /tmp/lighthouse-XXXXXX.json
+```text
+start_browser {}
+call_tool import_cookies {"file_path": "~/.sessions/example.json"}
+navigate {"url": "https://example.com/dashboard"}
+jobs {"action": "start", "tool": "run_lighthouse",
+      "arguments": {"url": "https://example.com/dashboard", "form_factor": "mobile",
+                    "categories": ["performance", "accessibility"]}}
+→ {"jobs": [{"id": "job_3f2a9c01de", "state": "working"}]}
+jobs {"action": "wait", "job_id": "job_3f2a9c01de", "timeout": 120}
+→ {"jobs": [{"state": "completed",
+             "result": {"scores": {"performance": 74, "accessibility": 92}, "files": [...]}}]}
 ```
 
-## Pair with a performance trace
+The report file appears in `files` both as a path and as a `browser://artifacts/` URI, which
+you can read with `resources/read`.
 
-For a specific interaction (not a whole page load), prefer a trace:
+## Trace a single interaction
 
-```python
-await start_trace()
-await human_click(selector="#buy-now")
-await wait_for_element("#thanks")
-await stop_trace("/tmp/buy-trace.json")
+To profile one interaction rather than a whole page load, record a trace:
+
+```text
+call_tool start_trace {}
+call_tool human_click {"selector": "#buy-now"}
+wait_for_element {"selector": "#thanks"}
+call_tool stop_trace {"file_path": "/tmp/buy-trace.json"}
 ```
 
-Open the JSON in Chrome DevTools (Performance tab > Load profile) - you get
-the same flame chart you'd get from the built-in recorder, minus the manual
-click-record-click dance.
+Load the JSON in Chrome DevTools' Performance panel to see the flame chart.

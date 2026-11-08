@@ -1,12 +1,29 @@
 [project]
 name = "zendriver-mcp-next"
 version = "0.5.0"
-description = "Undetectable browser automation MCP server for LLM agents, with a search gateway and 98 tools."
+description = "An MCP server that gives AI agents a real, headed Chrome that pages cannot tell is automated."
 readme = "README.md"
 requires-python = ">=3.10"
+keywords = ["mcp", "model-context-protocol", "browser-automation", "chrome", "cdp", "zendriver", "ai-agents"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP :: Browsers",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
-    "zendriver>=0.14.0",
-    # Direct, not transitive-via-zendriver: src/launch.py constructs the
+    # Tested against 0.17 (CDP bindings for Chrome 150+).
+    "zendriver>=0.17",
+    # Direct, not transitive-via-zendriver: zendriver_mcp/launch.py constructs the
     # Browser itself (the only way to watch the child process during startup)
     # and so has to register the shutdown hook Browser.create would have.
     "asyncio-atexit>=1.0",
@@ -15,7 +32,16 @@ dependencies = [
     # major release renamed FastMCP and Tool.inputSchema last time.
     "mcp>=2.3,<3",
     "Pillow",
+    # Imported directly for the HTTP transport (also pulled in by mcp).
+    "starlette>=0.27",
+    "uvicorn>=0.31.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/coffeegrind123/zendriver-mcp-next"
+Documentation = "https://github.com/coffeegrind123/zendriver-mcp-next/tree/main/docs"
+Issues = "https://github.com/coffeegrind123/zendriver-mcp-next/issues"
+Changelog = "https://github.com/coffeegrind123/zendriver-mcp-next/blob/main/CHANGELOG.md"
 
 [project.scripts]
 zendriver-mcp = "zendriver_mcp.server:main"
