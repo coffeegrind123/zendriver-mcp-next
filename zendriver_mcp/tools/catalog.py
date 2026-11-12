@@ -58,7 +58,7 @@ CORE = [
     "press_key",
     "get_text_content",
     "screenshot",
-    "execute_js",
+    "execute_javascript",
     "wait_for_element",
     "list_tabs",
     "scroll",

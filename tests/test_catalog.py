@@ -71,6 +71,13 @@ def test_call_tool_reports_unknown_names_with_a_suggestion() -> None:
     assert "get_cookies" in r.structured_content["hint"]
 
 
+def test_call_tool_names_the_new_name_of_a_renamed_tool() -> None:
+    r = asyncio.run(_call("call_tool", {"name": "execute_js", "arguments": {}}))
+    assert r.is_error
+    assert r.structured_content["code"] == "unknown_tool"
+    assert "renamed execute_javascript" in r.structured_content["hint"]
+
+
 def test_call_tool_validates_arguments() -> None:
     r = asyncio.run(_call("call_tool", {"name": "get_element_text", "arguments": {}}))
     assert r.is_error

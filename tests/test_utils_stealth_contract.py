@@ -66,7 +66,7 @@ def test_listings_are_read_only_and_setters_idempotent_writes() -> None:
         ("screenshot", {}, "page_not_loaded"),
         # Statement blocks with `return` are accepted (run as an async body);
         # with no page the failure is the missing page, not the syntax.
-        ("execute_js", {"script": "return 1"}, "page_not_loaded"),
+        ("execute_javascript", {"script": "return 1"}, "page_not_loaded"),
         ("wait", {"seconds": -1}, "invalid_argument"),
         ("set_device", {"profile": "iphone15pro"}, "invalid_argument"),
         ("set_network_conditions", {"profile": "slow3g"}, "invalid_argument"),

@@ -63,7 +63,7 @@ async def _scenario() -> dict:
             _sc(await c.call_tool("press_key", {"key": "Enter"}))
             probe = _sc(
                 await c.call_tool(
-                    "execute_js",
+                    "execute_javascript",
                     {
                         "script": "return {log, title: document.title, value: q.value,"
                         " zd: typeof window.__zd, marked: document.querySelectorAll('[data-zendriver-id]').length}"
@@ -75,15 +75,17 @@ async def _scenario() -> dict:
             # A slow promise: awaited within `timeout`, and past it the error says
             # the script may still be running (it matters for scripts that click).
             slow = "return await new Promise(r => setTimeout(() => r('done'), 1500))"
-            out["slow_ok"] = _sc(await c.call_tool("execute_js", {"script": slow, "timeout": 5}))
-            late = await c.call_tool("execute_js", {"script": slow, "timeout": 1})
+            out["slow_ok"] = _sc(
+                await c.call_tool("execute_javascript", {"script": slow, "timeout": 5})
+            )
+            late = await c.call_tool("execute_javascript", {"script": slow, "timeout": 1})
             out["slow_late"] = late.structured_content
 
             # Something covering the button must be named, not clicked through.
-            await c.call_tool("execute_js", {"script": "cover.style.display='block'"})
+            await c.call_tool("execute_javascript", {"script": "cover.style.display='block'"})
             covered = await c.call_tool("click", {"selector": "#go"})
             out["covered"] = covered.structured_content
-            await c.call_tool("execute_js", {"script": "cover.style.display='none'"})
+            await c.call_tool("execute_javascript", {"script": "cover.style.display='none'"})
 
             # A stale id after navigation is stale_id, not a wrong element.
             await c.call_tool("navigate", {"url": "data:text/html,<p>two</p>", "settle": 2})

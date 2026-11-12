@@ -187,7 +187,7 @@ INNER_CLICKABLE_FN = (
 
 # Dump the nested shadow-DOM tree of a light-DOM element for debugging.
 # Returns a condensed JSON tree so agents don't have to hand-roll
-# recursive execute_js calls to find the right selector path.
+# recursive execute_javascript calls to find the right selector path.
 DESCRIBE_SHADOW_FN = """
 function(host, maxDepth) {
   const cap = maxDepth || 6;

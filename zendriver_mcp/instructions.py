@@ -36,6 +36,6 @@ Results: every tool returns structured fields plus a text summary. Errors carry 
 follow the hint rather than retrying blindly. Files a tool writes (screenshots to disk, traces, \
 videos, exports) come back as browser://artifacts/ resource links.
 
-execute_js runs in the page's own JavaScript world and is visible to the page; prefer the dedicated \
+execute_javascript runs in the page's own JavaScript world and is visible to the page; prefer the dedicated \
 tools, which run where the page cannot see them.
 """

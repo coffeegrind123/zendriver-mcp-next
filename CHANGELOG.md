@@ -6,8 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- `execute_js` is renamed `execute_javascript`. Calls to the old name through
+  `call_tool`, `batch` or `jobs` fail with `unknown_tool` and a hint naming the new one.
+
 ### Added
-- `execute_js` takes a `timeout` (1-115 s) for scripts that poll or retry, and a timeout
+- `execute_javascript` takes a `timeout` (1-115 s) for scripts that poll or retry, and a timeout
   now warns that the script may still be running in the page.
 
 ### Fixed

@@ -213,13 +213,23 @@ class AccessibilityUidError(ZendriverMCPError):
     hint = "Take a fresh get_accessibility_snapshot and use a uid from it."
 
 
+# Old tool name -> current name. A saved batch or call_tool payload written
+# against an old name gets the new one in its hint; edit distance alone does not
+# find it (execute_js -> execute_javascript is 8 edits apart).
+RENAMED_TOOLS = {"execute_js": "execute_javascript"}
+
+
 class UnknownToolError(ZendriverMCPError):
     code = Code.UNKNOWN_TOOL
 
     def __init__(self, name: str, known: list[str]) -> None:
         from zendriver_mcp.suggest import did_you_mean
 
-        hint = did_you_mean(name, known) or "Find the right name with search_tools."
+        renamed = RENAMED_TOOLS.get(name)
+        if renamed:
+            hint = f"{name} was renamed {renamed}; call {renamed} with the same arguments."
+        else:
+            hint = did_you_mean(name, known) or "Find the right name with search_tools."
         super().__init__(f"Unknown tool: {name}", hint=hint)
 
 

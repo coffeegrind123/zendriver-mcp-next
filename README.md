@@ -113,7 +113,7 @@ The default `tools/list` has 19 entries: the core loop below, plus `search_tools
 
 | Core (always listed) | Reached through `search_tools` |
 |---|---|
-| `start_browser` `stop_browser` `get_browser_status` `navigate` `get_interaction_tree` `click` `type_text` `press_key` `get_text_content` `screenshot` `execute_js` `wait_for_element` `list_tabs` `scroll` | tabs and history · element queries · shadow DOM · forms · human-like mouse and typing · per-page and whole-browser cookies · local storage · network and console logs · request blocking, extra headers, mocking and failure injection · proxy · user agent, locale, timezone, geolocation · device, CPU and network emulation · permissions · accessibility tree · tracing and heap snapshots · Lighthouse · screencast to MP4 · Cloudflare challenge handling · security audit |
+| `start_browser` `stop_browser` `get_browser_status` `navigate` `get_interaction_tree` `click` `type_text` `press_key` `get_text_content` `screenshot` `execute_javascript` `wait_for_element` `list_tabs` `scroll` | tabs and history · element queries · shadow DOM · forms · human-like mouse and typing · per-page and whole-browser cookies · local storage · network and console logs · request blocking, extra headers, mocking and failure injection · proxy · user agent, locale, timezone, geolocation · device, CPU and network emulation · permissions · accessibility tree · tracing and heap snapshots · Lighthouse · screencast to MP4 · Cloudflare challenge handling · security audit |
 
 The full list, with each tool's effect, parameters and summary, is in
 **[docs/tools.md](docs/tools.md)**. That file is generated from the code.
@@ -145,7 +145,7 @@ in `tests/test_live.py`, which records events from a listener inside the page it
 | `Runtime.enable` console-serialisation side channel | Historically observable | Measured not observable on Chrome 157 with the classic stack-getter probe |
 
 The remaining exposure is documented, not hidden:
-- `execute_js` runs in the page's own world by design. Prefer the dedicated tools.
+- `execute_javascript` runs in the page's own world by design. Prefer the dedicated tools.
 - `select_option` sets a native `<select>` by script, so its `change` event is untrusted. For
   a trusted change, focus the select and use `press_key`.
 - `start_browser(low_memory=true)` adds container-friendly flags such as `--disable-gpu`,

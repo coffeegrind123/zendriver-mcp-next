@@ -8,7 +8,7 @@ detection vector the old code had:
    ``document.querySelector`` or ``Element.prototype.getBoundingClientRect`` to
    spot automation sees none of our calls, and none of our globals.
    ``World.MAIN`` is still available for what genuinely needs page globals
-   (``execute_js``, fingerprint overrides).
+   (``execute_javascript``, fingerprint overrides).
 
 2. **Element ids live in that isolated world**, in a Map, never as a DOM
    attribute. The old walker stamped a ``data-*`` id attribute on every element,

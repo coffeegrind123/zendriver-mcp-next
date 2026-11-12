@@ -70,7 +70,7 @@ All DOM work goes through `zendriver_mcp/dom.py`:
 - **Arguments** reach scripts as CDP call arguments, never by interpolating strings into
   JavaScript.
 
-`execute_js` deliberately runs in the page's own world, so it can read page globals.
+`execute_javascript` deliberately runs in the page's own world, so it can read page globals.
 
 ## Tabs and callers
 

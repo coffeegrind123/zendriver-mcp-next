@@ -24,7 +24,7 @@ from zendriver_mcp.registry import Effect, Reach
 from zendriver_mcp.response import Artifact, Result
 from zendriver_mcp.tools.base import DEFAULT_TOOL_TIMEOUT, JS_TIMEOUT_SECONDS, ToolBase
 
-# execute_js may wait this long for a script, leaving the tool's own budget room
+# execute_javascript may wait this long for a script, leaving the tool's own budget room
 # to report the timeout instead of being cut off by it.
 MAX_JS_TIMEOUT = max(JS_TIMEOUT_SECONDS, DEFAULT_TOOL_TIMEOUT - 5.0)
 
@@ -125,7 +125,7 @@ class UtilityTools(ToolBase):
     def _register_tools(self) -> None:
         """register utility tools"""
         self._register(self.screenshot, Effect.READ, "Screenshot")
-        self._register(self.execute_js, Effect.WRITE, "Run JavaScript", reach=Reach.WEB)
+        self._register(self.execute_javascript, Effect.WRITE, "Run JavaScript", reach=Reach.WEB)
         self._register(self.wait, Effect.READ, "Wait", page_scoped=False)
         self._register(self.wait_for_element, Effect.READ, "Wait for element")
         self._register(self.run_security_audit, Effect.READ, "Page security audit")
@@ -217,7 +217,7 @@ class UtilityTools(ToolBase):
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
-    async def execute_js(
+    async def execute_javascript(
         self,
         script: Annotated[
             str,
@@ -232,7 +232,7 @@ class UtilityTools(ToolBase):
             ),
         ] = JS_TIMEOUT_SECONDS,
     ) -> JsResult:
-        """Run JavaScript in the page's own context and return its value as JSON.
+        """Execute JavaScript in the page's own context and return its value as JSON.
 
         The escape hatch for anything the dedicated tools do not cover: reading
         page globals, calling page functions, extracting structured data in one
