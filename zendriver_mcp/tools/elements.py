@@ -125,6 +125,7 @@ class ElementTools(ToolBase):
         pages; an id stays valid while its element exists and expires on
         navigation. Fails with element_obscured, naming what is on top, when
         another element covers the target; pass force=true to click anyway.
+        Returns the target, its tag, and its numeric id when matched by text.
         """
         if selector:
             # Tag first: the click may navigate, and then the element is gone.
@@ -230,6 +231,7 @@ class ElementTools(ToolBase):
         the page receives genuine input events and no page JavaScript runs.
         Appends to any existing value: call clear_input first to replace it.
         Use press_key or human_type when a page needs per-key events.
+        Returns the target, its tag, and a summary with the character count.
         """
         handle = await self.resolve(selector)
         await focus_for_typing(self, handle)

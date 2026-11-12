@@ -225,7 +225,8 @@ class FormTools(ToolBase):
         all trusted, and does what the key does: Enter submits the enclosing
         form or activates a focused button, Tab moves focus, Backspace deletes.
         Use when a framework listens for key events that type_text's bulk insert
-        does not fire. Focuses selector first when given.
+        does not fire. Focuses selector first when given. Returns the key
+        pressed and the element focused first, if any.
         """
         k, code, vk, text = _key_definition(key)
         mods = 0

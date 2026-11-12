@@ -474,7 +474,8 @@ def install_catalog(mcp: FastMCP, surface: Surface) -> dict[str, Tool]:
         """Show one tool's full description, argument schema, result schema and hints.
 
         Use when a search_tools line is not enough to call the tool correctly, or
-        to learn which result fields a batch $N reference can read.
+        to learn which result fields a batch $N reference can read. Returns the
+        description, input schema, output schema and annotations.
         """
         tool = catalog.get(name)
         if tool is None:
@@ -499,7 +500,7 @@ def install_catalog(mcp: FastMCP, surface: Surface) -> dict[str, Tool]:
         arguments: Annotated[
             dict[str, Any],
             Field(
-                description='Arguments for that tool, matching its schema. {} for none. Example: {"url": "https://example.com"}'
+                description='Arguments for that tool, matching its schema. {} for none. e.g. {"url": "https://example.com"}'
             ),
         ] = {},  # noqa: B006
         ctx: Context | None = None,
@@ -509,7 +510,7 @@ def install_catalog(mcp: FastMCP, surface: Surface) -> dict[str, Tool]:
         Find the name with search_tools (describe_tool for the exact schema).
         Failures come back as errors with a code and a hint, exactly as from the
         tool itself. Its read-only/destructive nature is the called tool's, shown
-        in search_tools' `effect`.
+        in search_tools' `effect`. Returns exactly what the named tool returns.
         """
         return await invoke(name, arguments, ctx)
 
@@ -537,7 +538,7 @@ def install_catalog(mcp: FastMCP, surface: Surface) -> dict[str, Tool]:
         ] = True,
         ctx: Context | None = None,
     ) -> BatchResult:
-        """Run several tools in one call, in order, passing results forward.
+        """Run a batch of several tools in one call, in order, passing results forward.
 
         Saves a round trip per step for sequences you already know, such as
         navigate, fill a form, submit, read the result. Each step is validated
@@ -661,7 +662,8 @@ def install_catalog(mcp: FastMCP, surface: Surface) -> dict[str, Tool]:
         For calls that can outlast a client's request timeout (Lighthouse audits,
         heap snapshots, screencast exports, long waits) or that you want to run
         while doing something else. Progress the tool reports is recorded on the
-        job. Finished jobs are kept for an hour.
+        job. Finished jobs are kept for an hour. Returns the affected jobs with
+        their id, state, progress, and result once finished.
         """
         _prune()
         if action == "start":

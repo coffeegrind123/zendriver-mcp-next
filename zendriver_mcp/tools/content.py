@@ -132,6 +132,7 @@ class ContentTools(ToolBase):
         to interact. Same pagination contract as get_content. An empty result
         carries a diagnosis saying whether the page is still loading, has no
         body, keeps its text in iframes or shadow roots, or really is blank.
+        Returns one page of text plus the offset to continue from.
         """
         # Null-safe on purpose. `document.body.innerText` THROWS when the body
         # does not exist yet, and a thrown CDP exception reaches the caller as a

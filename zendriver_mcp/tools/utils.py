@@ -152,7 +152,8 @@ class UtilityTools(ToolBase):
         start_browser first — the default viewport is roughly 800x600, which is
         why screenshots come out small. The returned image is JPEG quality 60,
         downscaled to 1024px wide unless full_resolution is set; save_path files
-        keep full resolution and are also published as a resource.
+        keep full resolution and are also published as a resource. Returns the
+        image plus its returned and full dimensions and any saved file.
         """
         page = self.session.page
 
