@@ -527,7 +527,8 @@ def install_catalog(mcp: FastMCP, surface: Surface) -> dict[str, Tool]:
                     'substitutes inside a longer string. Example: [{"tool": "navigate", '
                     '"arguments": {"url": "https://example.com"}}, {"tool": '
                     '"get_text_content", "arguments": {}}]'
-                )
+                ),
+                max_length=MAX_BATCH_STEPS,
             ),
         ],
         stop_on_error: Annotated[
@@ -543,6 +544,7 @@ def install_catalog(mcp: FastMCP, surface: Surface) -> dict[str, Tool]:
         Saves a round trip per step for sequences you already know, such as
         navigate, fill a form, submit, read the result. Each step is validated
         when it runs, and nothing is rolled back: a browser cannot undo a click.
+        At most 50 steps per call; refer to an earlier step's result as "$N.field".
         Returns every step's outcome; failed_at names the step that stopped it.
         """
         if not steps:

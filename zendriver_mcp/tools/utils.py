@@ -241,6 +241,8 @@ class UtilityTools(ToolBase):
         as the body of an async function, so `await` works too). It runs in the
         page's main world, so it sees the page's variables and the page could
         in principle observe it; prefer the dedicated tools where they apply.
+        Nothing is rolled back: whatever the script changed before it threw
+        stays, and a script that times out may still be running in the page.
         """
         if not 1 <= timeout <= MAX_JS_TIMEOUT:
             raise InvalidArgumentError(
