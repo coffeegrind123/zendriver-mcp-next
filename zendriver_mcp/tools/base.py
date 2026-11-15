@@ -213,7 +213,12 @@ class ToolBase(ABC):
         register(
             ToolSpec(**{**spec.__dict__, "summary": first})  # frozen: rebuild with the summary
         )
-        self._mcp.tool(title=title, annotations=spec.annotations())(guarded)
+        # inspect.getdoc dedents: Python 3.12 keeps docstring indentation (3.13
+        # strips it at compile time), and the SDK sends __doc__ as is, so on
+        # 3.12 every line carried eight spaces into each client's context.
+        self._mcp.tool(title=title, description=doc or None, annotations=spec.annotations())(
+            guarded
+        )
 
     def _dialog_aware(
         self, fn: "Callable[..., Coroutine[Any, Any, Any]]", name: str
