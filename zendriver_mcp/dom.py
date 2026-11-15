@@ -103,6 +103,12 @@ BUTTON_MASK = {"left": 1, "right": 2, "middle": 4, "back": 8, "forward": 16}
 
 _WALK_GROUP = "zd-walk"
 
+# Resolves after two animation frames, or 250 ms if the tab is not drawing.
+_TWO_FRAMES_JS = (
+    "new Promise((r) => { let done = false; const fin = () => { if (!done) { done = true; r(true); } };"
+    " requestAnimationFrame(() => requestAnimationFrame(fin)); setTimeout(fin, 250); })"
+)
+
 # Wheel gestures: pixels per second, and how the end of a scroll is detected
 # (the position unchanged across one poll).
 _SCROLL_SPEED = 3000
@@ -859,6 +865,8 @@ class Dom:
                 )
             except ProtocolException:
                 pass  # not scrollable (fixed, or detached); the quads say the rest
+            if frame.parent is not None:
+                await self._presented(frame)
         try:
             quads = await frame.session.send(
                 cdp.dom.get_content_quads(backend_node_id=handle.backend_node_id)
@@ -872,6 +880,24 @@ class Dom:
             if w > 0 and h > 0:
                 return sum(xs) / 4 + dx, sum(ys) / 4 + dy
         raise ElementHiddenError(handle.label)
+
+    async def _presented(self, frame: Frame) -> None:
+        """Wait until the tab and ``frame`` have drawn a frame since the last scroll.
+
+        Chrome routes input to an out-of-process iframe by hit-test data that
+        the compositor updates only when it draws. Measured on CI (2026-11-15):
+        a click dispatched straight after scrolling such an iframe into view
+        landed on the <iframe> element in the parent page, at the correct
+        point, and never reached the frame. Two animation frames in each
+        document (from our isolated world) means a new frame has been drawn;
+        the timeout covers a tab that is not drawing at all.
+        """
+        main = await self.main_frame()
+        for f in (main, frame):
+            try:
+                await self.evaluate_in(f, _TWO_FRAMES_JS)
+            except (ProtocolException, ZendriverMCPError):
+                pass  # a frame navigating away: the click will say what happened
 
     async def obstruction(self, handle: Handle, x: float, y: float) -> str | None:
         """What a click at tab point (x, y) would hit instead of the element, or None.
