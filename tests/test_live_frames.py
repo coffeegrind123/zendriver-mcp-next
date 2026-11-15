@@ -103,6 +103,16 @@ async def _scenario(c: Any, sites: Sites) -> dict[str, Any]:
     out["click_cross"] = await c.call_tool(
         "click", {"selector": str(by[(cross, "Inner cross")]["id"])}
     )
+    # Where things were, for diagnosing a click that did not arrive.
+    out["geometry"] = sc(
+        await c.call_tool(
+            "execute_javascript",
+            {
+                "script": "const r = document.getElementById('cross').getBoundingClientRect();"
+                " return {scrollY, innerHeight, cross: [r.x, r.y, r.width, r.height]}"
+            },
+        )
+    )
     out["type_cross"] = await c.call_tool(
         "type_text", {"selector": str(by[(cross, "Field cross")]["id"]), "text": "hello"}
     )
