@@ -24,7 +24,8 @@ pytestmark = live
 
 GUARD = """<script>
 window.log = [];
-const rec = (e) => log.push(e.type + ':' + e.isTrusted + ':' + (e.target.id || e.target.tagName));
+const rec = (e) => log.push(e.type + ':' + e.isTrusted + ':' + (e.target.id || e.target.tagName) +
+  (e.type === 'click' ? '@' + Math.round(e.clientX) + ',' + Math.round(e.clientY) : ''));
 addEventListener('click', rec, true);
 addEventListener('input', rec, true);
 new MutationObserver((ms) => ms.forEach((m) => m.type === 'attributes' &&
@@ -196,7 +197,7 @@ def test_trusted_click_and_typing_inside_frames(run: dict[str, Any]) -> None:
         assert not run[key].is_error, (key, run[key].content)
     logs = _value(run["top_logs"])
     same = logs["same"]
-    assert "click:true:ib" in same, same
+    assert any(e.startswith("click:true:ib") for e in same), same
     assert logs["cross"] == "cross-origin"
 
 
@@ -215,7 +216,13 @@ def test_frame_text_is_read_under_a_header(run: dict[str, Any]) -> None:
 
 def test_cross_site_frame_events_are_trusted(run: dict[str, Any]) -> None:
     cross = _frame_text(run["text"], "cross")
-    assert "click:true:ib" in cross, cross
+    diag = {
+        "click": run["click_cross"].structured_content,
+        "geometry": run["geometry"],
+        "top_log": _value(run["top_logs"]).get("top"),
+        "frames": run["frames"],
+    }
+    assert "click:true:ib" in cross, (cross, diag)
     assert "input:true:in-cross" in cross, cross
     assert "input:true:only-cross" in cross, cross
     assert ":false:" not in cross, cross
