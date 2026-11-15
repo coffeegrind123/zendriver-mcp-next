@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from tests.live_harness import Sites, live, sc, with_browser
+from tests.live_harness import Sites, foreign_attrs, live, sc, with_browser
 
 pytestmark = live
 
@@ -237,17 +237,7 @@ def test_frame_navigation_makes_its_ids_stale(run: dict[str, Any]) -> None:
 
 
 def _foreign(entries: list[str]) -> list[str]:
-    """Attribute changes, minus the bundled cookie-banner extension's own.
-
-    "I Still Don't Care About Cookies" adds classes to <html> on http(s) pages:
-    `idc0_343` and random ones (`zqevyahv`, `ozjhggrxrk`). That is the
-    extension, not this server, and is a known exposure of loading it. This
-    server never writes a class, and these pages set none on <html>, so any
-    class change there is the extension's; everything else must be absent.
-    """
-    return [
-        e for e in entries or [] if e.startswith("attr:") and not e.startswith("attr:class@HTML=")
-    ]
+    return foreign_attrs(entries)
 
 
 def test_no_trace_in_any_document(run: dict[str, Any]) -> None:

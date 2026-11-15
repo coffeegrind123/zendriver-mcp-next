@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from tests.live_harness import Sites, live, sc, with_browser
+from tests.live_harness import Sites, foreign_attrs, live, sc, with_browser
 
 pytestmark = live
 
@@ -232,7 +232,7 @@ def test_input_is_trusted_except_where_reported(run: dict[str, Any]) -> None:
     log = run["page"]["log"]
     false = [e for e in log if ":false:" in e]
     assert all(e.endswith(":col") for e in false), false
-    assert not [e for e in log if e.startswith("attr:")], log
+    assert not foreign_attrs(log), log
 
 
 def test_kinds_are_reported(run: dict[str, Any]) -> None:

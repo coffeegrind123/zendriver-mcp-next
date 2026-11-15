@@ -20,6 +20,17 @@ live = pytest.mark.skipif(
 )
 
 
+def foreign_attrs(log: list[str]) -> list[str]:
+    """Attribute changes in a page's log, minus the bundled cookie extension's.
+
+    "I Still Don't Care About Cookies" adds classes to <html> on http(s) pages
+    (`idc0_343`, and random ones such as `ozjhggrxrk`), at a moment that varies
+    run to run. That is the extension, a known exposure of loading it, not this
+    server: it never writes a class, and the test pages set none on <html>.
+    """
+    return [e for e in log or [] if e.startswith("attr:") and not e.startswith("attr:class@HTML")]
+
+
 def data_url(html: str) -> str:
     return "data:text/html," + urllib.parse.quote(html)
 
