@@ -42,7 +42,7 @@ async def _call(name: str, args: dict):
 
 def test_every_tool_has_title_annotations_and_output_schema() -> None:
     tools = asyncio.run(_list())
-    assert len(tools) == 25
+    assert len(tools) == 28
     for t in tools:
         assert t.title, t.name
         assert t.annotations is not None and t.annotations.read_only_hint is not None, t.name

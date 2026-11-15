@@ -57,3 +57,27 @@ def test_traversal_still_resolves_under_home() -> None:
     tricky = str(Path.home() / ".." / Path.home().name / "ok.txt")
     target = resolve_artifact_path(tricky, default_prefix="x", default_ext="txt")
     assert Path.home() in target.parents or target.parent == Path.home()
+
+
+def test_a_nul_byte_is_a_refusal_not_a_crash() -> None:
+    # Path.resolve() raises ValueError on an embedded NUL, which surfaced as an
+    # internal error naming nothing the caller could fix.
+    import pytest
+
+    from zendriver_mcp.artifacts import resolve_artifact_path
+    from zendriver_mcp.errors import Code, ZendriverMCPError
+
+    with pytest.raises(ZendriverMCPError) as info:
+        resolve_artifact_path("/tmp/shot\x00.png", default_prefix="x", default_ext="png")
+    assert info.value.code is Code.INVALID_ARGUMENT
+
+
+def test_an_existing_directory_is_refused_as_a_file_target(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import pytest
+
+    from zendriver_mcp.artifacts import resolve_artifact_path
+    from zendriver_mcp.errors import Code, ZendriverMCPError
+
+    with pytest.raises(ZendriverMCPError) as info:
+        resolve_artifact_path(str(tmp_path), default_prefix="x", default_ext="png")
+    assert info.value.code is Code.INVALID_ARGUMENT

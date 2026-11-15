@@ -5,41 +5,19 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 from zendriver import cdp
 
-from zendriver_mcp.errors import Code, InvalidArgumentError, ZendriverMCPError
+from zendriver_mcp import submit_guard
+from zendriver_mcp.errors import InvalidArgumentError
+from zendriver_mcp.keys import Modifier, key_definition, modifier_bits, send_key
 from zendriver_mcp.registry import Effect, Reach
 from zendriver_mcp.response import Result
 from zendriver_mcp.tools.base import ToolBase
-from zendriver_mcp.tools.elements import focus_for_typing
+from zendriver_mcp.tools.fill import FieldOutcome, FieldSpec, Filler
 
-# CDP key definitions for named keys: (key, code, windowsVirtualKeyCode, text).
-# Sent through Input.dispatchKeyEvent, so the browser itself produces the
-# keydown/keypress/keyup sequence with isTrusted:true and does what the key does
-# natively: Enter submits the enclosing form (implicit submission), Tab moves
-# focus, arrows move the caret. The old implementation dispatched synthetic
-# KeyboardEvents from page JavaScript and re-implemented Enter and Tab by hand;
-# both were isTrusted:false and missed real browser behaviour.
-_NAMED_KEYS: dict[str, tuple[str, str, int, str | None]] = {
-    "Enter": ("Enter", "Enter", 13, "\r"),
-    "Tab": ("Tab", "Tab", 9, None),
-    "Escape": ("Escape", "Escape", 27, None),
-    "Backspace": ("Backspace", "Backspace", 8, None),
-    "Delete": ("Delete", "Delete", 46, None),
-    "ArrowUp": ("ArrowUp", "ArrowUp", 38, None),
-    "ArrowDown": ("ArrowDown", "ArrowDown", 40, None),
-    "ArrowLeft": ("ArrowLeft", "ArrowLeft", 37, None),
-    "ArrowRight": ("ArrowRight", "ArrowRight", 39, None),
-    "Space": (" ", "Space", 32, " "),
-    " ": (" ", "Space", 32, " "),
-    "Home": ("Home", "Home", 36, None),
-    "End": ("End", "End", 35, None),
-    "PageUp": ("PageUp", "PageUp", 33, None),
-    "PageDown": ("PageDown", "PageDown", 34, None),
-}
-
-# CDP modifier bit field.
-_MODIFIER_BITS = {"Alt": 1, "Control": 2, "Meta": 4, "Shift": 8}
-
-Modifier = Literal["Alt", "Control", "Meta", "Shift"]
+# The form an element belongs to (itself, an ancestor, or its form= owner).
+_FORM_OF_FN = """function(el) {
+  const form = el.tagName === 'FORM' ? el : (el.form || el.closest('form'));
+  return form ? { id: globalThis.__zd.idOf(form) } : null;
+}"""
 
 SELECTOR_DESCRIPTION = (
     "CSS selector, or a numeric id from get_interaction_tree, of the element to "
@@ -47,29 +25,17 @@ SELECTOR_DESCRIPTION = (
 )
 
 
-def _key_definition(key: str) -> tuple[str, str, int, str | None]:
-    """CDP fields for a named key or a single printable character."""
-    if key in _NAMED_KEYS:
-        return _NAMED_KEYS[key]
-    if len(key) != 1:
-        raise InvalidArgumentError(
-            f"Unknown key {key!r}.",
-            hint="Use a single character or one of: "
-            + ", ".join(k for k in _NAMED_KEYS if k != " "),
-        )
-    ch = key
-    if ch.isalpha():
-        return ch, f"Key{ch.upper()}", ord(ch.upper()), ch
-    if ch.isdigit():
-        return ch, f"Digit{ch}", ord(ch), ch
-    # Punctuation: no reliable US-layout code without a table; Chrome accepts
-    # an empty code and still inserts the text.
-    return ch, "", 0, ch
-
-
 class FillResult(Result):
-    filled: list[str] = Field(description="Selectors that were filled.")
-    missing: list[str] = Field(description="Selectors that matched nothing and were skipped.")
+    filled: list[str] = Field(description="Fields that were filled.")
+    missing: list[str] = Field(description="Fields that matched nothing and were skipped.")
+    ambiguous: list[str] = Field(
+        default_factory=list,
+        description="Fields whose label fits several fields; nothing was guessed.",
+    )
+    failed: list[str] = Field(default_factory=list, description="Fields found but not filled.")
+    fields: list[FieldOutcome] = Field(
+        default_factory=list, description="Each field's outcome: status, kind, id, trusted, detail."
+    )
 
 
 class KeyResult(Result):
@@ -80,6 +46,10 @@ class KeyResult(Result):
 class SubmitResult(Result):
     target: str = Field(description="The form selector.")
     method: str = Field(description="'requestSubmit' (handlers and validation run) or 'submit'.")
+
+
+class AllowResult(Result):
+    guard_enabled: bool = Field(description="Whether the submit guard is on for this server.")
 
 
 class PointResult(Result):
@@ -102,62 +72,85 @@ class FormTools(ToolBase):
         self._register(self.press_key, Effect.WRITE, "Press key", reach=Reach.WEB)
         self._register(self.press_enter, Effect.WRITE, "Press Enter", reach=Reach.WEB)
         self._register(self.mouse_click, Effect.WRITE, "Click at coordinates", reach=Reach.WEB)
+        self._register(
+            self.allow_next_submit, Effect.WRITE, "Allow the next submit", page_scoped=False
+        )
 
     async def fill_form(
         self,
         form_data: Annotated[
-            dict[str, Any] | str,
+            dict[str, Any] | str | None,
             Field(
-                description='An object mapping CSS selector (or interaction-tree id) to the value to type, or the same object as a JSON string. Example: {"#email": "user@example.com", "#password": "hunter2"}'
+                description='Shorthand: selector (or tree id) -> value, as an object or JSON string. Example: {"#email": "a@b.c"}'
             ),
-        ],
+        ] = None,
+        fields: Annotated[
+            list[FieldSpec] | None,
+            Field(
+                description='Fields in order, each by target or label, with value, checked, options or files. Example: [{"label": "Email", "value": "a@b.c"}, {"label": "I agree", "checked": true}]'
+            ),
+        ] = None,
     ) -> FillResult:
-        """Fill several form fields in one call, clearing each before typing.
+        """Fill several form fields of any kind in one call, as a person would.
 
-        Faster than repeated clear_input/type_text pairs. Each field is focused
-        with a real click, emptied, and given its value through the browser's
-        text insertion. Selectors that match nothing are reported in missing,
-        not treated as failures. Does not submit: follow with submit_form,
-        press_enter or click.
+        A field is found by selector, tree id, or label (its label, placeholder
+        or question, in any frame) and filled with trusted input the way that
+        control is filled by hand: typing, clicking checkboxes and radios only
+        when needed, picking a group's or combobox's option, arrow keys for
+        selects and ranges, typed dates and times, files. Colour, month and
+        week inputs, and any field the trusted route missed, are set by script
+        and reported trusted=false. Each field reports filled, missing,
+        ambiguous (never guessed) or failed. Does not submit.
         """
-        if isinstance(form_data, str):
-            try:
-                data = json.loads(form_data)
-            except json.JSONDecodeError as exc:
-                raise InvalidArgumentError(
-                    f"form_data is not valid JSON: {exc}",
-                    hint='Pass an object like {"#email": "a@b.c"}.',
-                ) from exc
-        else:
-            data = form_data
-        if not isinstance(data, dict):
-            raise InvalidArgumentError("form_data must be an object of selector -> value.")
-
-        filled: list[str] = []
-        missing: list[str] = []
-        for selector, value in data.items():
-            try:
-                handle = await self.resolve(str(selector))
-            except ZendriverMCPError as exc:
-                if exc.code in (Code.ELEMENT_NOT_FOUND, Code.STALE_ID):
-                    missing.append(str(selector))
-                    continue
-                raise
-            await focus_for_typing(self, handle)
-            await self.element_call(
-                handle,
-                "function(el) {"
-                " if (typeof el.select === 'function') { el.select(); }"
-                " else { const r = document.createRange(); r.selectNodeContents(el);"
-                "   const s = getSelection(); s.removeAllRanges(); s.addRange(r); }"
-                " document.execCommand('delete'); }",
+        specs: list[FieldSpec] = []
+        if form_data is not None:
+            if isinstance(form_data, str):
+                try:
+                    data = json.loads(form_data)
+                except json.JSONDecodeError as exc:
+                    raise InvalidArgumentError(
+                        f"form_data is not valid JSON: {exc}",
+                        hint='Pass an object like {"#email": "a@b.c"}.',
+                    ) from exc
+            else:
+                data = form_data
+            if not isinstance(data, dict):
+                raise InvalidArgumentError("form_data must be an object of selector -> value.")
+            for selector, value in data.items():
+                checked = value if isinstance(value, bool) else None
+                specs.append(
+                    FieldSpec(
+                        target=str(selector),
+                        value=None if checked is not None else value,
+                        checked=checked,
+                    )
+                )
+        specs += fields or []
+        if not specs:
+            raise InvalidArgumentError(
+                "Nothing to fill.",
+                hint='Pass fields, e.g. [{"label": "Email", "value": "a@b.c"}], or form_data.',
             )
-            await self.session.page.send(cdp.input_.insert_text(str(value)))
-            filled.append(str(selector))
 
-        note = f"; {len(missing)} not found: {', '.join(missing)}" if missing else ""
+        filler = Filler(self)
+        outcomes = [await filler.fill(spec) for spec in specs]
+        by: dict[str, list[str]] = {"filled": [], "missing": [], "ambiguous": [], "failed": []}
+        for o in outcomes:
+            by[o.status].append(o.field)
+        untrusted = [o.field for o in outcomes if o.trusted is False]
+        parts = [f"Filled {len(by['filled'])} of {len(outcomes)} field(s)"]
+        for key in ("missing", "ambiguous", "failed"):
+            if by[key]:
+                parts.append(f"{len(by[key])} {key}: {', '.join(by[key])}")
+        if untrusted:
+            parts.append(f"set by script (untrusted): {', '.join(untrusted)}")
         return FillResult(
-            summary=f"Filled {len(filled)} field(s){note}", filled=filled, missing=missing
+            summary="; ".join(parts),
+            filled=by["filled"],
+            missing=by["missing"],
+            ambiguous=by["ambiguous"],
+            failed=by["failed"],
+            fields=outcomes,
         )
 
     async def submit_form(
@@ -182,6 +175,13 @@ class FormTools(ToolBase):
         clicking the actual submit button or press_enter is still the most
         faithful option. Fails when the selector does not match a <form>.
         """
+        form = await self.element_call(selector, _FORM_OF_FN)
+        if form is None:
+            raise InvalidArgumentError(
+                f"{selector} is outside any form.",
+                hint="Find the form with find_element('form'), or click the submit button.",
+            )
+        await submit_guard.check_form(self, await self.dom.resolve(str(form["id"])))
         result = await self.element_call(
             selector,
             "function(el, native) {"
@@ -228,37 +228,12 @@ class FormTools(ToolBase):
         does not fire. Focuses selector first when given. Returns the key
         pressed and the element focused first, if any.
         """
-        k, code, vk, text = _key_definition(key)
-        mods = 0
-        for m in modifiers or []:
-            mods |= _MODIFIER_BITS[m]
-        if mods & (_MODIFIER_BITS["Control"] | _MODIFIER_BITS["Alt"] | _MODIFIER_BITS["Meta"]):
-            text = None  # a shortcut, not text entry
-        if selector:
-            await self.dom.focus(selector)
-        page = self.session.page
-        await page.send(
-            cdp.input_.dispatch_key_event(
-                type_="keyDown" if text else "rawKeyDown",
-                key=k,
-                code=code or None,
-                windows_virtual_key_code=vk or None,
-                native_virtual_key_code=vk or None,
-                text=text,
-                unmodified_text=text,
-                modifiers=mods or None,
-            )
-        )
-        await page.send(
-            cdp.input_.dispatch_key_event(
-                type_="keyUp",
-                key=k,
-                code=code or None,
-                windows_virtual_key_code=vk or None,
-                native_virtual_key_code=vk or None,
-                modifiers=mods or None,
-            )
-        )
+        mods = modifier_bits(modifiers)
+        key_definition(key)  # an unknown key fails before anything is focused
+        focused = await self.dom.focus(selector) if selector else None
+        chord = bool(mods & modifier_bits(["Control", "Meta"]))
+        await submit_guard.check_key(self, key, chord, focused)
+        await send_key(self.session.page, key, mods)
         combo = "+".join([*(modifiers or []), key])
         return KeyResult(
             summary=f"Pressed {combo}" + (f" on {selector}" if selector else ""),
@@ -308,6 +283,7 @@ class FormTools(ToolBase):
         within the current viewport; scroll first if not. Reports what element
         sat at that point.
         """
+        await submit_guard.check_point(self, x, y)
         page = self.session.page
         hit = await self.run_js(
             "(() => { const t = document.elementFromPoint(%f, %f); if (!t) return null;"
@@ -334,3 +310,18 @@ class FormTools(ToolBase):
             y=y,
             hit=hit,
         )
+
+    async def allow_next_submit(self) -> AllowResult:
+        """Let exactly one action through the submit guard, once a person has approved it.
+
+        With ZENDRIVER_MCP_SUBMIT_GUARD=1, submitting a form or pressing a
+        send/pay/delete-style control fails with submit_blocked. Call this only
+        after the person agreed, then repeat the action. Returns whether the
+        guard is on.
+        """
+        if not submit_guard.enabled():
+            return AllowResult(
+                summary="The submit guard is off; nothing to allow.", guard_enabled=False
+            )
+        self.session.submit_allowance = True
+        return AllowResult(summary="The next submit is allowed, once.", guard_enabled=True)

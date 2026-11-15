@@ -10,9 +10,10 @@ a real, headed Chrome, driven over the Chrome DevTools Protocol through
 [zendriver](https://github.com/cdpdriver/zendriver), and built so the page it is looking at
 cannot tell an agent is there.
 
-- **98 browser tools** behind a small fixed tool list: navigation, elements, forms, tabs,
-  cookies and storage, network logs and mocking, emulation, accessibility, tracing,
-  Lighthouse, screencasts and more.
+- **112 browser tools** behind a small fixed tool list: navigation, elements, iframes, forms,
+  tabs, dialogs, downloads, cookies and session export, network logs and response bodies,
+  mocking and blocking, emulation, accessibility, tracing, Lighthouse, screencasts, PDF and
+  more.
 - **Hard to detect by design.** Helper scripts and element ids live in an isolated JavaScript
   world, nothing is written into the DOM, and clicks and keys are trusted input events.
 - **Built for the current MCP spec.** It serves 2026-07-28 and the 2025 handshake versions
@@ -85,6 +86,18 @@ start_browser → navigate(url) → get_interaction_tree → click / type_text /
 - **Elements** are addressed by CSS selector, or by the numeric id that
   `get_interaction_tree` assigns. Ids stay valid while the element exists. A stale id fails
   with code `stale_id` instead of hitting the wrong element.
+- **Iframes**, same-origin and cross-site, are walked too: their elements carry a frame
+  number `f`, and clicks, typing and ids work inside them as in the page.
+- **`fill_form`** fills any kind of field (text, checkbox, radio group, select, multi-select,
+  combobox, range, date, time, file), found by selector, id, or the label a person reads.
+- **`get_interaction_tree(only_changed=true)`** after an action returns only what it changed,
+  plus the ids it removed.
+- **Dialogs.** An `alert` or `confirm` freezes its tab; tools on it fail at once with
+  `dialog_open` until `handle_dialog` answers it, or `set_dialog_policy` answers them all.
+- **Waiting** on single-page apps: `wait_for_element` with `state` (visible, attached, hidden,
+  detached), `wait_for_text` (or its disappearance) and `wait_for_url`.
+- **Reading:** `get_text_content(format="markdown")` keeps headings, lists, links, tables and
+  code; `get_response_body` returns the API responses a page fetched.
 - **Tabs.** Every page tool takes an optional `tab="tab_2"`, which acts on that tab for one
   call without switching to it. Tabs the page opens itself (popups, `target=_blank`) are
   picked up automatically.
@@ -109,7 +122,7 @@ shaped like this:
 The default `tools/list` has 19 entries: the core loop below, plus `search_tools`,
 `describe_tool`, `call_tool`, `batch` and `jobs`. The core tools are tagged
 `anthropic/alwaysLoad` so that Claude Code's tool search never defers them. Set
-`ZENDRIVER_MCP_SURFACE=full` to list all 103 directly.
+`ZENDRIVER_MCP_SURFACE=full` to list all 117 directly.
 
 | Core (always listed) | Reached through `search_tools` |
 |---|---|
@@ -146,8 +159,17 @@ in `tests/test_live.py`, which records events from a listener inside the page it
 
 The remaining exposure is documented, not hidden:
 - `execute_javascript` runs in the page's own world by design. Prefer the dedicated tools.
-- `select_option` sets a native `<select>` by script, so its `change` event is untrusted. For
-  a trusted change, focus the select and use `press_key`.
+- `select_option` sets a native `<select>` by script, so its `change` event is untrusted.
+  `fill_form` changes a select with arrow keys, which is trusted.
+- `fill_form` sets colour, month and week inputs by script (Chrome opens a native picker for
+  them), and falls back to a script for any field whose trusted route did not take. Each such
+  field is reported with `trusted: false`.
+- The bundled "I Still Don't Care About Cookies" extension adds classes such as `idc0_343` to
+  `<html>` on http(s) pages. That is the extension's own marker, readable by the page.
+- A full-page `screenshot` scrolls through the page and back with trusted wheel gestures, so
+  the page sees scrolling, as for a person reading it. It does not use
+  `captureBeyondViewport`, which resizes the viewport and fires a `resize` event in the page.
+- `block_resources` makes images (or other types) fail to load, which a page can notice.
 - `start_browser(low_memory=true)` adds container-friendly flags such as `--disable-gpu`,
   which produce detectable software WebGL. Use it only where Chrome cannot start without it.
 
@@ -164,6 +186,7 @@ All settings are optional environment variables.
 | `ZENDRIVER_MCP_AUTOSTART_BROWSER` | off | Starts Chrome on the first call that needs it, and replaces a browser that died. |
 | `ZENDRIVER_MCP_TOOL_TIMEOUT` | `120` | Per-call time budget, in seconds. A hung CDP call returns an error rather than hanging the session. |
 | `ZENDRIVER_MCP_LAUNCH_TIMEOUT` | budget − reserve | Time allowed for Chrome to start. |
+| `ZENDRIVER_MCP_SUBMIT_GUARD` | off | Refuses actions that would submit a form or press a send, pay, buy, delete or publish control (code `submit_blocked`), until `allow_next_submit` lets one through. Checks only read the page; nothing in it is patched. |
 | `ZENDRIVER_MCP_ARTIFACT_ROOT` | – | Extra directories, besides `$HOME` and the temp dir, that tools may write files to. |
 | `ZENDRIVER_MCP_SKIP_DISPLAY_CHECK` | off | Skips the X display pre-flight check before launching. |
 | `ZENDRIVER_MCP_CONFIG_DIR` | `~/.config/zendriver-mcp` | Where HTTP tokens are stored. |
@@ -241,7 +264,7 @@ uv sync --dev
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src
 uv run pytest                                   # unit, contract and protocol tests
-DISPLAY=:99 ZENDRIVER_MCP_LIVE=1 uv run pytest tests/test_live.py   # real Chrome
+DISPLAY=:99 ZENDRIVER_MCP_LIVE=1 uv run pytest tests/test_live*.py   # real Chrome
 uv run python scripts/gen_tool_docs.py          # regenerate docs/tools.md
 ```
 

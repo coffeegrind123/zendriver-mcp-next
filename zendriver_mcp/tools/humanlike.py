@@ -10,6 +10,7 @@ from typing import Annotated
 
 from pydantic import Field
 
+from zendriver_mcp import submit_guard
 from zendriver_mcp.errors import Code, InvalidArgumentError, ZendriverMCPError
 from zendriver_mcp.humaninput import (
     Point,
@@ -106,6 +107,7 @@ class HumanInputTools(ToolBase):
         else:
             raise InvalidArgumentError("Pass selector or text.")
 
+        await submit_guard.check_click(self, handle)
         cx, cy = await self.dom.center(handle)
         if not force:
             blocker = await self.dom.obstruction(handle, cx, cy)

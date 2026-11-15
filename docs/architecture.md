@@ -54,23 +54,49 @@ All DOM work goes through `zendriver_mcp/dom.py`:
 
 - **Isolated world.** Helper scripts run in a `Page.createIsolatedWorld` context. It shares
   the DOM with the page, but not the page's JavaScript heap, so a page that wraps
-  `querySelector` or reads globals sees nothing. This was measured on Chrome before it was
-  relied on: creating the world again with the same name returns the same context, so state
-  persists; after a navigation the context is gone ("Cannot find context"), which is exactly
-  when element ids should expire.
-- **Element ids.** `get_interaction_tree` numbers elements in a Map inside that world. An
-  element keeps its id for as long as it exists, and an id is never reused. A stale id fails
-  with `stale_id`. Nothing is written into the DOM.
+  `querySelector` or reads globals sees nothing. Creating the world again with the same name
+  returns the same context, so state persists. A cached context id is trusted only for the
+  document it was made in (the frame's loader id): after a cross-site navigation the new
+  renderer process numbers its contexts from 1 again, and an old id was measured resolving to
+  a different live context (an extension's content-script world).
+- **Frames.** Every frame gets its own isolated world. Same-process iframes are listed by the
+  tab's `Page.getFrameTree`, and their geometry is already in tab coordinates. Cross-site
+  iframes are separate targets (`Tab.get_frames()`), whose geometry is relative to the
+  iframe, so the owning `<iframe>`'s content box is added at each such level. Input always
+  goes to the top-level tab, which routes it into the frame under the point.
+- **Element ids.** `get_interaction_tree` numbers elements in a Map inside each frame's
+  world; `dom.py` maps each to a tab-wide id that records the frame and document. An element
+  keeps its id for as long as it exists, and an id is never reused within a tab, so an id
+  from a page or frame that has since navigated fails with `stale_id` instead of naming a
+  new element. Nothing is written into the DOM. Closed shadow roots, which script cannot
+  open, are found through `DOM.getDocument` and handed to the walker when asked for
+  (`closed_shadow=true`).
 - **Clicks** use CDP's own geometry (`DOM.scrollIntoViewIfNeeded`, `DOM.getContentQuads`),
   then send `Input.dispatchMouseEvent` move, press and release events. The page receives
   trusted pointer, mouse and click events. Before clicking, the server checks what is
   actually under the point. A covering element fails with `element_obscured` and is named
-  in the error. A label or wrapper of the target counts as the target, so custom checkboxes
-  still work. `force=true` clicks anyway.
+  in the error, at the element's own frame and at every enclosing one (a banner over an
+  embedded form covers the `<iframe>`). A label or wrapper of the target counts as the
+  target, so custom checkboxes still work. `force=true` clicks anyway.
 - **Arguments** reach scripts as CDP call arguments, never by interpolating strings into
   JavaScript.
 
 `execute_javascript` deliberately runs in the page's own world, so it can read page globals.
+
+## Dialogs, downloads and the submit guard
+
+- **Dialogs** (`zendriver_mcp/dialogs.py`). An open dialog freezes its tab: script
+  evaluation and the input call that opened it wait for an answer. The tool wrapper
+  (`ToolBase._dialog_aware`) refuses to start a page tool under an open dialog and races a
+  running one against a dialog opening, so both fail at once with `dialog_open`.
+- **Downloads** (`zendriver_mcp/downloads.py`). `Browser.setDownloadBehavior` with events
+  routes every download into a directory of ours, renamed on completion to the suggested name.
+- **Submit guard** (`zendriver_mcp/submit_guard.py`, opt-in). Before a click, a key or
+  `submit_form`, a read-only check in the isolated world decides whether it would submit a
+  form (HTML implicit-submission rules included) or press a committing control.
+  `allow_next_submit` lets one through. Nothing in the page is patched.
+- **Capture** (`zendriver_mcp/capture.py`). Full-page screenshots scroll and stitch rather
+  than use `captureBeyondViewport`, which resizes the viewport where the page can see it.
 
 ## Tabs and callers
 

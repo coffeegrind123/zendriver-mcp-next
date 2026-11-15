@@ -9,6 +9,13 @@ search_tools; do NOT just raise the budget.
 
 Measured 2026-11-08 (SDK 2.3 rewrite): catalogue surface 19 tools, 23.8 KB
 input side; full surface 103 tools, 99 KB input side, 76 KB of output schemas.
+
+Measured 2026-11-15, after descriptions were trimmed: catalogue 19 tools,
+25.2 KB (budget unchanged); full surface 117 tools, 110.3 KB input side,
+91.8 KB of output schemas. The full budgets were raised for 14 new tools
+(dialogs, downloads, response bodies, text and URL waits, open_tabs, save_pdf,
+session export/import, block_resources, allow_next_submit), each about 0.8 KB
+input side; the full surface is opt-in (ZENDRIVER_MCP_SURFACE=full).
 """
 
 from __future__ import annotations
@@ -22,8 +29,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 CATALOG_BUDGET_BYTES = 26_000
 CATALOG_MAX_TOOLS = 20
-FULL_BUDGET_BYTES = 105_000
-FULL_OUTPUT_BUDGET_BYTES = 82_000
+FULL_BUDGET_BYTES = 113_000
+FULL_OUTPUT_BUDGET_BYTES = 94_000
 
 _MEASURE = (
     "import json,asyncio;from zendriver_mcp.tools import mcp;t=asyncio.run(mcp.list_tools());"

@@ -25,6 +25,9 @@ class Code(str, Enum):
     ELEMENT_HIDDEN = "element_hidden"
     ELEMENT_OBSCURED = "element_obscured"
     STALE_ID = "stale_id"
+    AMBIGUOUS = "ambiguous"
+    DIALOG_OPEN = "dialog_open"
+    SUBMIT_BLOCKED = "submit_blocked"
     TAB_NOT_FOUND = "tab_not_found"
     TAB_FORBIDDEN = "tab_forbidden"
     UNKNOWN_TOOL = "unknown_tool"
@@ -107,6 +110,16 @@ class ElementHiddenError(ZendriverMCPError):
     def __init__(self, selector: str) -> None:
         super().__init__(f"Element is hidden: {selector}")
         self.selector = selector
+
+
+class AmbiguousError(ZendriverMCPError):
+    """A selector or label names more than one element, and guessing would be wrong."""
+
+    code = Code.AMBIGUOUS
+    hint = (
+        "Use an id from get_interaction_tree, which names one element in one frame, "
+        "or a more specific selector."
+    )
 
 
 class StaleIdError(ZendriverMCPError):

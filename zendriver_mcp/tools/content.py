@@ -1,12 +1,20 @@
 # page content tools - get html, get text, scroll
+import asyncio
 import json
 from typing import Annotated, Any, Literal
 
 from pydantic import Field
+from zendriver.core.connection import ProtocolException
 
+from zendriver_mcp.errors import ZendriverMCPError
 from zendriver_mcp.registry import Effect
 from zendriver_mcp.response import Result
-from zendriver_mcp.tools.base import ToolBase
+from zendriver_mcp.tools._markdown_js import MARKDOWN_FN
+from zendriver_mcp.tools.base import JS_TIMEOUT_SECONDS, ToolBase
+
+# Null-safe: `document.body.innerText` throws while the body does not exist yet.
+_BODY_TEXT_JS = "document.body ? document.body.innerText : ''"
+_ELEMENT_TEXT_FN = "function(el) { return el.innerText || el.textContent || ''; }"
 
 
 class Page(Result):
@@ -46,21 +54,62 @@ class InteractionTree(Result):
         description=(
             "Interactive elements: id (pass to click/type_text), t type (btn, link, in, "
             "chk, rad, sel, tab, mnu, el), l label, r region (hdr, nav, main, side, ftr, "
-            "dlg), and when relevant h link target, it input type, v value, ck checked, "
-            "dis disabled, off offscreen."
+            "dlg), and when relevant f frame number (absent in the main page), h link "
+            "target, it input type, v value, ck checked, req required, dis disabled, "
+            "off offscreen, hid hidden (a file input behind a styled button)."
         )
     )
     total: int = Field(description="How many interactive elements the page has.")
     truncated: bool = Field(description="Whether `limit` cut the list short.")
+    removed: list[int] | None = Field(
+        default=None,
+        description="With only_changed: ids of elements gone since the previous tree.",
+    )
+    frames: list[dict[str, Any]] | None = Field(
+        default=None,
+        description="The iframes walked besides the main page, as {f, url}; absent when there are none.",
+    )
 
     def render(self) -> str:
         payload = json.dumps(self.elements, separators=(",", ":"), ensure_ascii=False)
-        if self.truncated:
-            return (
-                f"[showing {len(self.elements)} of {self.total} elements; raise limit for more]"
-                f"\n{payload}"
+        lines = []
+        if self.frames:
+            lines.append(
+                "[frames: " + ", ".join(f"f{fr['f']}={fr['url']}" for fr in self.frames) + "]"
             )
-        return payload
+        if self.truncated:
+            lines.append(
+                f"[showing {len(self.elements)} of {self.total} elements; raise limit for more]"
+            )
+        lines.append(payload)
+        return "\n".join(lines)
+
+
+# Fields that move with scrolling rather than with the page: an element that
+# scrolled into view has not changed.
+_UNSTABLE = ("id", "off", "r")
+
+
+def signatures(elements: list[dict[str, Any]]) -> dict[int, str]:
+    """Each element's id mapped to what it shows, for comparing two trees."""
+    out: dict[int, str] = {}
+    for e in elements:
+        eid = e.get("id")
+        if isinstance(eid, int):
+            stable = {k: v for k, v in e.items() if k not in _UNSTABLE}
+            out[eid] = json.dumps(stable, sort_keys=True, ensure_ascii=False)
+    return out
+
+
+def delta(before: dict[int, str], after: dict[int, str]) -> tuple[set[int], list[int]]:
+    """Ids new or changed in ``after``, and ids gone from it, oldest first.
+
+    Ids name one element for its whole life, so this is exact: a re-rendered
+    element is "removed" plus "new", an edited one is "changed".
+    """
+    changed = {i for i, sig in after.items() if before.get(i) != sig}
+    removed = sorted(i for i in before if i not in after)
+    return changed, removed
 
 
 class ScrollResult(Result):
@@ -72,6 +121,12 @@ class ContentTools(ToolBase):
     """tools for page content and scrolling"""
 
     GROUP = "content"
+
+    # The last tree per tab, for only_changed: tab -> (main document, signatures).
+    _baselines: dict[int, tuple[str | None, dict[int, str]]] = {}
+
+    def _reset_state(self) -> None:
+        self._baselines.clear()
 
     def _register_tools(self) -> None:
         """register content tools"""
@@ -124,6 +179,16 @@ class ContentTools(ToolBase):
                 description="Character offset to start from, for paging through long text. Example: 0"
             ),
         ] = 0,
+        format: Annotated[
+            Literal["text", "markdown"],
+            Field(
+                description="'markdown' keeps headings, lists, links, tables and code, from the page's main content. Example: 'markdown'"
+            ),
+        ] = "text",
+        selector: Annotated[
+            str | None,
+            Field(description="Read only this element (selector or tree id). Example: 'article'"),
+        ] = None,
     ) -> TextPage:
         """Get the page's visible text, without any HTML markup.
 
@@ -131,7 +196,8 @@ class ContentTools(ToolBase):
         and no selectors are returned, so use get_interaction_tree if you intend
         to interact. Same pagination contract as get_content. An empty result
         carries a diagnosis saying whether the page is still loading, has no
-        body, keeps its text in iframes or shadow roots, or really is blank.
+        body, keeps its text in shadow roots, or really is blank. Text inside
+        iframes follows, each under a "--- frame N (url) ---" line.
         Returns one page of text plus the offset to continue from.
         """
         # Null-safe on purpose. `document.body.innerText` THROWS when the body
@@ -141,8 +207,18 @@ class ContentTools(ToolBase):
         # `TypeError: Cannot read properties of null (reading 'innerText')` on a
         # page that had simply not finished loading. Returning empty lets the
         # diagnosis below say which of the possible causes it actually is.
-        text = await self.run_js("document.body ? document.body.innerText : ''")
-        page = self._paginate(str(text or ""), max_chars, offset)
+        if selector is not None:
+            handle = await self.resolve(selector)
+            fn = MARKDOWN_FN if format == "markdown" else _ELEMENT_TEXT_FN
+            text = str(await self.element_call(handle, fn) or "")
+            page = self._paginate(text, max_chars, offset)
+            return TextPage(summary=page.header(), **page.model_dump(exclude={"summary"}))
+        if format == "markdown":
+            text = str(await self.element_call(await self.resolve(":root"), MARKDOWN_FN) or "")
+        else:
+            text = await self.run_js(_BODY_TEXT_JS)
+        text = str(text or "") + await self._frame_text(format)
+        page = self._paginate(text, max_chars, offset)
         fields = page.model_dump(exclude={"summary"})
         if text:
             return TextPage(summary=page.header(), **fields)
@@ -153,6 +229,33 @@ class ContentTools(ToolBase):
         # different fix, so say which one it is.
         diagnosis = await self._empty_text_diagnosis()
         return TextPage(summary=f"{page.header()} {diagnosis}", diagnosis=diagnosis, **fields)
+
+    async def _frame_text(self, format: str = "text") -> str:
+        """The visible text of each rendered iframe, under a header naming it.
+
+        Frames are numbered as get_interaction_tree numbers them. A frame that
+        fails to answer (it navigated mid-read, or hangs) is skipped rather than
+        failing the whole read.
+        """
+        parts: list[str] = []
+        try:
+            frames = await self.dom.frames()
+        except ProtocolException:
+            return ""
+        for frame in frames[1:]:
+            try:
+                if not await self.dom.frame_shown(frame):
+                    continue
+                if format == "markdown":
+                    read = self.dom.call(await self.dom.root(frame), MARKDOWN_FN)
+                else:
+                    read = self.dom.evaluate_in(frame, _BODY_TEXT_JS)
+                text = await asyncio.wait_for(read, timeout=JS_TIMEOUT_SECONDS)
+            except (ZendriverMCPError, ProtocolException, TimeoutError, asyncio.TimeoutError):
+                continue
+            if text and str(text).strip():
+                parts.append(f"\n\n--- frame {frame.number} ({frame.url}) ---\n{text}")
+        return "".join(parts)
 
     async def _empty_text_diagnosis(self) -> str:
         """Explain an empty innerText: not-yet-rendered, no body, or genuinely blank."""
@@ -225,11 +328,24 @@ class ContentTools(ToolBase):
                 description="Include each link's target as 'h' (a path when same-origin). Off by default because it roughly doubles the output; turn it on when you need to follow or identify a link. Example: true"
             ),
         ] = False,
+        only_changed: Annotated[
+            bool,
+            Field(
+                description="Only what changed since this tab's last tree: new or changed elements, plus removed ids. Example: true"
+            ),
+        ] = False,
+        closed_shadow: Annotated[
+            bool,
+            Field(
+                description="Also walk closed shadow roots; roughly doubles the walk's time. Example: true"
+            ),
+        ] = False,
     ) -> InteractionTree:
         """List the page's interactive elements, each with a short numeric id.
 
         The cheapest way to see what can be clicked or typed into: it walks the
-        DOM including shadow roots for buttons, links, and inputs. The numeric ids
+        DOM, open shadow roots and iframes for buttons, links, and inputs; an
+        element inside an iframe carries its frame number as f. The numeric ids
         it assigns are accepted directly by click, type_text, and the other
         element tools in place of a CSS selector. An id stays valid while its
         element exists, survives later walks, and expires on navigation; an
@@ -237,15 +353,15 @@ class ContentTools(ToolBase):
         leaves no trace in the page. Returns the elements (capped at limit),
         the total, and whether the cap cut the list short.
 
-        Pass links=true to get each link's target as `h` — a path when it is
-        same-origin, a full URL otherwise. Following a link then means a navigate
-        instead of a click-and-hope, which matters when the link text is
-        unhelpful or missing. It is off by default because it roughly doubles the
-        output; measured at +116% on a 125-link search page. Nothing is emitted
-        for javascript: handlers, bare "#" anchors, or links back to the current
-        page, none of which can take you anywhere.
+        only_changed=true after an action shows just its effect (exact, since
+        ids are stable); a new page gets the full tree.
+
+        links=true adds each link's target as `h` (a path when same-origin),
+        so a link can be followed with navigate; off by default because it
+        roughly doubles the output. javascript:, bare "#" and same-page links
+        get none.
         """
-        tree = await self._walk()
+        tree, frames = await self._walk(closed_shadow=closed_shadow)
         # The walker always collects link targets; whether the CALLER pays for
         # them is decided here, because the cost is in the returned JSON rather
         # than in the walk. Non-dict entries cannot come from our walker, but it
@@ -254,19 +370,53 @@ class ContentTools(ToolBase):
         if not links:
             for element in elements:
                 element.pop("h", None)
+
+        # Every walk becomes the baseline for the next only_changed call.
+        page_key = await self._page_key()
+        current = signatures(elements)
+        previous = self._baselines.get(self._baseline_slot())
+        self._baselines[self._baseline_slot()] = (page_key, current)
+        removed: list[int] | None = None
+        note = ""
+        if only_changed:
+            if previous is not None and previous[0] == page_key:
+                changed, removed = delta(previous[1], current)
+                elements = [e for e in elements if e.get("id") in changed]
+                note = (
+                    f"; {len(elements)} new or changed, {len(removed)} removed since the last tree"
+                )
+            else:
+                note = "; full tree: no earlier tree of this page to compare with"
+
         limit = max(1, limit)
         total = len(elements)
         shown = elements[:limit]
         return InteractionTree(
             summary=f"{total} interactive element(s)"
-            + (f", showing {limit}" if total > limit else ""),
+            + (f", showing {limit}" if total > limit else "")
+            + note,
             elements=shown,
             total=total,
             truncated=total > limit,
+            frames=frames or None,
+            removed=removed,
         )
 
-    async def _walk(self) -> list[Any]:
-        return await self.dom.walk()
+    def _baseline_slot(self) -> int:
+        try:
+            return id(self.session.page)
+        except Exception:
+            return 0
+
+    async def _page_key(self) -> str | None:
+        """The main document's identity: a new one means a new page, not a change."""
+        try:
+            return (await self.dom.main_frame()).loader_id
+        except Exception:
+            return None
+
+    async def _walk(self, *, closed_shadow: bool = False) -> tuple[list[Any], list[dict[str, Any]]]:
+        return await self.dom.walk(closed_shadow=closed_shadow)
 
     async def scroll(
         self,
@@ -285,13 +435,8 @@ class ContentTools(ToolBase):
         with a synthesized wheel gesture, as a user would. Returns the vertical
         scroll position afterwards.
         """
-        page = self.session.page
-        if direction == "down":
-            await page.scroll_down(amount)
-        else:
-            await page.scroll_up(amount)
-        y = await self.run_js("window.scrollY")
-        return ScrollResult(summary=f"Scrolled {direction} {amount}px (scrollY={y})", scroll_y=y)
+        y = await self.dom.scroll_by(amount if direction == "down" else -amount)
+        return ScrollResult(summary=f"Scrolled {direction} {amount}px (scrollY={y:g})", scroll_y=y)
 
     async def scroll_to_element(
         self,

@@ -32,7 +32,11 @@ def _tools(js_result: Any, text: Any = "") -> ContentTools:
             raise js_result
         return js_result
 
+    async def no_frames(*_args: object) -> str:
+        return ""
+
     tools.run_js = run_js  # type: ignore[method-assign]
+    tools._frame_text = no_frames  # type: ignore[method-assign]
     tools._calls = calls  # type: ignore[attr-defined]
     return tools
 
@@ -142,7 +146,11 @@ def test_the_extraction_script_itself_cannot_throw_on_a_null_body() -> None:
         seen.append(script)
         return ""
 
+    async def no_frames(*_args: object) -> str:
+        return ""
+
     tools = ContentTools.__new__(ContentTools)
     tools.run_js = run_js  # type: ignore[method-assign]
+    tools._frame_text = no_frames  # type: ignore[method-assign]
     asyncio.run(tools.get_text_content())
     assert "document.body ?" in seen[0], f"extraction must be null-safe, got {seen[0]!r}"

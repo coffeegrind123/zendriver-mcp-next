@@ -25,8 +25,14 @@ covers it the click fails with element_obscured and names the cover (pass force=
 Tabs: every page tool takes an optional tab="tab_N" to act on that tab for one call without \
 switching. list_tabs shows tabs the page opened itself (popups, target=_blank) too.
 
-More tools: only the core loop is listed. Find the rest with search_tools (cookies, storage, \
-network logs and mocking, blocking, headers, proxy, emulation of device/network/geolocation/timezone/\
+Iframes are walked like the page: their elements carry a frame number f and take ids as usual. \
+Forms: fill_form fills any kind of field, found by label, in one call. After an action, \
+get_interaction_tree(only_changed=true) shows just what changed. An alert or confirm freezes its \
+tab: tools then fail with dialog_open; answer it with handle_dialog.
+
+More tools: only the core loop is listed. Find the rest with search_tools (forms, dialogs, \
+downloads, waits for text or URL, PDF, session export, cookies, storage, \
+network logs and response bodies, mocking, blocking, headers, proxy, emulation of device/network/geolocation/timezone/\
 locale, permissions, accessibility tree, tracing, heap snapshots, Lighthouse, screencasts, \
 Cloudflare challenges, security audit, human-like input, shadow DOM). Run one with call_tool, \
 a known sequence with batch (later steps read earlier results as "$N.field"), and anything slow \

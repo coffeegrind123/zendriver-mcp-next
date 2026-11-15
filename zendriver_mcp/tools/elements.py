@@ -5,6 +5,7 @@ from typing import Annotated, Any
 from pydantic import Field
 from zendriver import cdp
 
+from zendriver_mcp import submit_guard
 from zendriver_mcp.dom import Handle
 from zendriver_mcp.errors import (
     Code,
@@ -131,10 +132,12 @@ class ElementTools(ToolBase):
             # Tag first: the click may navigate, and then the element is gone.
             handle = await self.resolve(selector)
             tag = await self._tag(handle)
+            await submit_guard.check_click(self, handle)
             await self.dom.click(handle, force=force)
             return ElementResult(summary=f"Clicked: {selector}", target=selector, tag=tag)
         if text:
             handle, info = await find_by_text(self, text)
+            await submit_guard.check_click(self, handle)
             await self.dom.click(handle, force=force)
             shadow = " (inside shadow DOM)" if info.get("shadow") else ""
             return ElementResult(
@@ -181,6 +184,7 @@ class ElementTools(ToolBase):
                 hint="Inspect it with describe_shadow; the control may sit in a closed shadow root or deeper than max_depth.",
             )
         inner = await self.resolve(str(found["id"]))
+        await submit_guard.check_click(self, inner)
         await self.dom.click(inner, force=force)
         role = f" role={found['role']}" if found.get("role") else ""
         return ElementResult(

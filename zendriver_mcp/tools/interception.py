@@ -61,6 +61,26 @@ ErrorReason = Literal[
 ]
 
 
+# CDP resource types worth blocking for speed; Document is left out on purpose
+# (blocking it blanks the page).
+BlockableType = Literal[
+    "Image",
+    "Media",
+    "Font",
+    "Stylesheet",
+    "Script",
+    "TextTrack",
+    "XHR",
+    "Fetch",
+    "EventSource",
+    "WebSocket",
+    "Manifest",
+    "Ping",
+    "Prefetch",
+    "Other",
+]
+
+
 @dataclass(slots=True)
 class _Rule:
     id: str
@@ -72,6 +92,8 @@ class _Rule:
     headers: dict[str, str] = field(default_factory=dict)
     error_reason: str = "Failed"  # matches cdp.network.ErrorReason members
     match_count: int = 0
+    # Only requests of these CDP resource types match; empty matches any type.
+    resource_types: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -87,6 +109,9 @@ class RuleInfo(BaseModel):
     action: Literal["mock", "fail"] = Field(description="What a matching request gets.")
     status: int | None = Field(default=None, description="Mocked HTTP status (mock rules).")
     error_reason: str | None = Field(default=None, description="Network error (fail rules).")
+    resource_types: list[str] | None = Field(
+        default=None, description="Resource types the rule is limited to, if any."
+    )
     match_count: int = Field(description="Requests this rule has handled.")
 
 
@@ -125,6 +150,7 @@ class InterceptionTools(ToolBase):
     def _register_tools(self) -> None:
         self._register(self.mock_response, Effect.WRITE, "Mock responses", reach=Reach.WEB)
         self._register(self.fail_requests, Effect.WRITE, "Fail requests", reach=Reach.WEB)
+        self._register(self.block_resources, Effect.WRITE, "Block resource types", reach=Reach.WEB)
         self._register(
             self.list_interceptions, Effect.READ, "List interception rules", page_scoped=False
         )
@@ -145,6 +171,7 @@ class InterceptionTools(ToolBase):
             action="mock" if r.action == "mock" else "fail",
             status=r.status if r.action == "mock" else None,
             error_reason=r.error_reason if r.action == "fail" else None,
+            resource_types=r.resource_types or None,
             match_count=r.match_count,
         )
 
@@ -228,6 +255,38 @@ class InterceptionTools(ToolBase):
         )
         return RuleAdded(
             summary=f"Failing {url_pattern} with {error_reason} on {rule.tab_id} ({rule.id})",
+            rule=self._info(rule),
+            active_rules=len(self._rules),
+        )
+
+    async def block_resources(
+        self,
+        types: Annotated[
+            list[BlockableType],
+            Field(description="Resource types to block. Example: ['Image', 'Media', 'Font']"),
+        ],
+        url_pattern: Annotated[
+            str,
+            Field(
+                description="Only block those whose URL matches this Unix glob; '*' for all. Example: '*'"
+            ),
+        ] = "*",
+    ) -> RuleAdded:
+        """Block this tab's images, media, fonts or other resource types, to load pages faster.
+
+        They fail as BlockedByClient. Pages can notice (an image that never
+        loads), and some treat that as a bot signal. Returns the rule's id.
+        """
+        if not types:
+            raise InvalidArgumentError("Name at least one resource type.")
+        rule = await self._add_rule(
+            url_pattern=url_pattern or "*",
+            action="fail",
+            error_reason="BlockedByClient",
+            resource_types=list(dict.fromkeys(types)),
+        )
+        return RuleAdded(
+            summary=f"Blocking {', '.join(rule.resource_types)} on {rule.tab_id} ({rule.id})",
             rule=self._info(rule),
             active_rules=len(self._rules),
         )
@@ -325,12 +384,15 @@ class InterceptionTools(ToolBase):
     def _make_handler(self, tab: zd.Tab, tab_id: str) -> PausedHandler:
         async def on_paused(event: cdp.fetch.RequestPaused) -> bool:
             url = event.request.url
+            kind = event.resource_type.value if event.resource_type is not None else ""
             async with self._lock:
                 match = next(
                     (
                         r
                         for r in self._rules
-                        if r.tab_id == tab_id and fnmatch.fnmatch(url, r.url_pattern)
+                        if r.tab_id == tab_id
+                        and fnmatch.fnmatch(url, r.url_pattern)
+                        and (not r.resource_types or kind in r.resource_types)
                     ),
                     None,
                 )

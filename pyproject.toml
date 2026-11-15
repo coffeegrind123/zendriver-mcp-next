@@ -92,3 +92,14 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Chrome still sends deprecated Page events (downloadWillBegin/downloadProgress,
+# frameScheduledNavigation/frameClearedScheduledNavigation) whenever the Page
+# domain is on, which dialog handling needs, and zendriver's CDP parser warns
+# once per event it parses. Not our code and not avoidable from here; the
+# server uses none of these events.
+filterwarnings = [
+    "ignore:Call to deprecated class DownloadWillBegin:DeprecationWarning",
+    "ignore:Call to deprecated class DownloadProgress:DeprecationWarning",
+    "ignore:Call to deprecated class FrameScheduledNavigation:DeprecationWarning",
+    "ignore:Call to deprecated class FrameClearedScheduledNavigation:DeprecationWarning",
+]

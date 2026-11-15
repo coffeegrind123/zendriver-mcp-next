@@ -12,6 +12,7 @@ from typing import Annotated, Any
 from mcp.server.mcpserver import MCPServer as FastMCP
 from pydantic import Field
 
+from zendriver_mcp.dialogs import DialogOpenError
 from zendriver_mcp.dom import Dom, Handle, World, dom_for
 from zendriver_mcp.errors import (
     BrowserNotStartedError,
@@ -41,6 +42,9 @@ TAB_PARAMETER = inspect.Parameter(
 # client's own request timeout (30s in this stack's mcp/adapter.json) so the
 # caller gets a real message instead of a transport timeout.
 JS_TIMEOUT_SECONDS = 20.0
+
+# Tools that must run while a dialog is open: they are how it gets answered.
+DIALOG_TOOLS = frozenset({"handle_dialog", "list_dialogs", "set_dialog_policy"})
 
 
 # One definition of the tool budget, shared with the launch path: a Chrome
@@ -172,6 +176,7 @@ class ToolBase(ABC):
         sig = inspect.signature(fn, eval_str=True)
         params = list(sig.parameters.values())
         takes_tab = page_scoped and "tab" not in sig.parameters
+        watch_dialogs = page_scoped and name not in DIALOG_TOOLS
         if takes_tab:
             params.append(TAB_PARAMETER)
             hints["tab"] = TAB_PARAMETER.annotation
@@ -184,7 +189,8 @@ class ToolBase(ABC):
             try:
                 if tab_id is not None:
                     token = CALL_TAB.set(self._session.tab_for_call(tab_id))
-                result = await self._run_budgeted(fn, name, budget, args, kwargs)
+                run = self._dialog_aware(fn, name) if watch_dialogs else fn
+                result = await self._run_budgeted(run, name, budget, args, kwargs)
             except Exception as exc:
                 return error_result(exc)
             finally:
@@ -208,6 +214,46 @@ class ToolBase(ABC):
             ToolSpec(**{**spec.__dict__, "summary": first})  # frozen: rebuild with the summary
         )
         self._mcp.tool(title=title, annotations=spec.annotations())(guarded)
+
+    def _dialog_aware(
+        self, fn: "Callable[..., Coroutine[Any, Any, Any]]", name: str
+    ) -> "Callable[..., Coroutine[Any, Any, Any]]":
+        """``fn``, refusing to start under an open dialog and stopping when one opens.
+
+        A dialog freezes its tab: script evaluation and even the input call that
+        opened it wait until it is answered. Without this a tool on that tab ran
+        into its whole time budget and failed as a generic timeout.
+        """
+
+        async def run(*args: Any, **kwargs: Any) -> Any:
+            try:
+                tab = self._session.page
+            except ZendriverMCPError:
+                return await fn(*args, **kwargs)  # no browser or page yet: nothing to watch
+            await self._session.ensure_listeners(tab)
+            dialogs = self._session.dialogs
+            already = dialogs.open_on(tab)
+            if already is not None:
+                raise DialogOpenError(
+                    f"A {already.describe()} is open on this tab; {name} cannot run until it is answered."
+                )
+            work = asyncio.ensure_future(fn(*args, **kwargs))
+            opened = asyncio.ensure_future(dialogs.opened_event(tab).wait())
+            try:
+                await asyncio.wait({work, opened}, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                opened.cancel()
+            if work.done():
+                return work.result()
+            work.cancel()
+            dialog = dialogs.open_on(tab)
+            what = dialog.describe() if dialog else "dialog"
+            raise DialogOpenError(
+                f"{name} opened a {what}. Whatever {name} did up to that point has happened; "
+                "the page waits for the dialog to be answered."
+            )
+
+        return run
 
     async def _run_budgeted(
         self,

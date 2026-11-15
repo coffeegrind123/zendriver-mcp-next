@@ -23,10 +23,10 @@ from zendriver_mcp.tools.content import ContentTools
 def _tools(tree):
     tools = ContentTools.__new__(ContentTools)
 
-    async def walk():
+    async def walk(**_kwargs):
         # A fresh copy each call: the tool mutates what the walker returns, and a
         # test that shared one list would pass for the wrong reason.
-        return json.loads(json.dumps(tree))
+        return json.loads(json.dumps(tree)), []
 
     tools._walk = walk  # type: ignore[method-assign]
     return tools

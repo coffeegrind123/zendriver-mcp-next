@@ -1,7 +1,9 @@
 # utility tools - screenshot, js execution, waiting, security audit
 import asyncio
+import fnmatch
 import io
 import os
+import re
 import tempfile
 import time
 from datetime import datetime
@@ -10,6 +12,7 @@ from typing import Annotated, Any, Literal
 from PIL import Image as PILImage
 from pydantic import BaseModel, Field
 
+from zendriver_mcp import capture
 from zendriver_mcp.artifacts import publish, resolve_artifact_path
 from zendriver_mcp.dom import World
 from zendriver_mcp.errors import (
@@ -58,14 +61,49 @@ class JsResult(Result):
         return json.dumps(self.value, separators=(",", ":"), default=str, ensure_ascii=False)
 
 
+class PdfResult(Result):
+    size: int = Field(description="Bytes written.")
+    files: list[Artifact] = Field(description="The PDF, as a file and a resource.")
+
+
 class WaitResult(Result):
     seconds: float = Field(description="Seconds waited.")
 
 
 class ElementWaitResult(Result):
     selector: str = Field(description="The selector or id waited for.")
-    found: bool = Field(description="Always true: a miss is reported as an error.")
-    elapsed: float = Field(description="Seconds until it appeared.")
+    found: bool = Field(
+        description="Whether the element is in the DOM now (false once a hidden or detached wait is met by its absence)."
+    )
+    elapsed: float = Field(description="Seconds until the state was reached.")
+    state: str | None = Field(default=None, description="The state waited for.")
+
+
+class TextWaitResult(Result):
+    text: str = Field(description="The text waited for.")
+    gone: bool = Field(description="Whether the wait was for the text to disappear.")
+    elapsed: float = Field(description="Seconds until it appeared (or disappeared).")
+
+
+class UrlWaitResult(Result):
+    url: str = Field(description="The page's URL when it matched.")
+    elapsed: float = Field(description="Seconds until it matched.")
+
+
+def url_matches(url: str, pattern: str) -> bool:
+    """A URL against a pattern: '/regex/', a glob with '*', or a substring."""
+    if len(pattern) > 1 and pattern.startswith("/") and pattern.endswith("/"):
+        return re.search(pattern[1:-1], url) is not None
+    if "*" in pattern:
+        return fnmatch.fnmatchcase(url, pattern)
+    return pattern in url
+
+
+# Visible text of the document, for wait_for_text.
+_BODY_TEXT_JS = "document.body ? document.body.innerText : ''"
+
+# How often waits re-check the page.
+_POLL = 0.25
 
 
 class AuditCheck(BaseModel):
@@ -125,9 +163,12 @@ class UtilityTools(ToolBase):
     def _register_tools(self) -> None:
         """register utility tools"""
         self._register(self.screenshot, Effect.READ, "Screenshot")
+        self._register(self.save_pdf, Effect.WRITE, "Save page as PDF")
         self._register(self.execute_javascript, Effect.WRITE, "Run JavaScript", reach=Reach.WEB)
         self._register(self.wait, Effect.READ, "Wait", page_scoped=False)
         self._register(self.wait_for_element, Effect.READ, "Wait for element")
+        self._register(self.wait_for_text, Effect.READ, "Wait for text")
+        self._register(self.wait_for_url, Effect.READ, "Wait for URL")
         self._register(self.run_security_audit, Effect.READ, "Page security audit")
 
     async def screenshot(
@@ -144,6 +185,16 @@ class UtilityTools(ToolBase):
                 description="Return the image without downscaling. By default the returned image is capped at 1024px wide to save vision tokens; set true when you need to read fine detail. Example: false"
             ),
         ] = False,
+        full_page: Annotated[
+            bool,
+            Field(
+                description="The whole page: scrolled through and stitched (fixed headers repeat), at most 20000 px. Example: true"
+            ),
+        ] = False,
+        selector: Annotated[
+            str | None,
+            Field(description="Only this element (selector or tree id). Example: '#chart'"),
+        ] = None,
     ) -> ScreenshotResult:
         """Take a screenshot of the visible viewport as an image you can look at directly.
 
@@ -155,13 +206,25 @@ class UtilityTools(ToolBase):
         keep full resolution and are also published as a resource. Returns the
         image plus its returned and full dimensions and any saved file.
         """
-        page = self.session.page
+        if full_page and selector:
+            raise InvalidArgumentError("Pass full_page or selector, not both.")
+        note_extra = ""
+        if selector:
+            png, cut = await capture.element_png(self.dom, await self.resolve(selector))
+            note_extra = f" of {selector}" + (", cut to the viewport" if cut else "")
+        elif full_page:
+            png, cut = await capture.full_page_png(self.dom)
+            note_extra = " of the full page" + (
+                f", cut at {capture.MAX_FULL_PAGE_HEIGHT}px" if cut else ""
+            )
+        else:
+            png = await capture.viewport_png(self.dom)
 
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
             tmp_path = tmp.name
+            tmp.write(png)
 
         try:
-            await page.save_screenshot(tmp_path)
             # compress to JPEG (under 1MB limit); downscale the RETURNED image to
             # cap vision-token cost, while save_path keeps the full resolution.
             with PILImage.open(tmp_path) as img:
@@ -203,7 +266,7 @@ class UtilityTools(ToolBase):
                 note = f", downscaled from {full_res.width}x{full_res.height}" if downscaled else ""
                 saved = f", saved to {files[0].path}" if files else ""
                 result = ScreenshotResult(
-                    summary=f"Screenshot {returned.width}x{returned.height}{note}{saved}",
+                    summary=f"Screenshot{note_extra} {returned.width}x{returned.height}{note}{saved}",
                     width=returned.width,
                     height=returned.height,
                     full_width=full_res.width,
@@ -217,6 +280,34 @@ class UtilityTools(ToolBase):
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
+    async def save_pdf(
+        self,
+        save_path: Annotated[
+            str | None,
+            Field(
+                description="Where to write the PDF, under $HOME or the temp dir. Omit for a temp file. Example: '/tmp/invoice.pdf'"
+            ),
+        ] = None,
+        landscape: Annotated[
+            bool, Field(description="Landscape pages instead of portrait. Example: false")
+        ] = False,
+        background: Annotated[
+            bool,
+            Field(description="Print background colours and images. Example: true"),
+        ] = True,
+    ) -> PdfResult:
+        """Save the page as a PDF, as Chrome's Print to PDF would.
+
+        Uses the page's print stylesheet. Returns the file and a resource.
+        """
+        data = await capture.pdf(self.dom, landscape=landscape, background=background)
+        path = resolve_artifact_path(save_path or "", default_prefix="page", default_ext="pdf")
+        path.write_bytes(data)
+        files = [publish(path, "application/pdf")]
+        return PdfResult(
+            summary=f"Saved PDF ({len(data)} bytes) to {path}", size=len(data), files=files
+        )
 
     async def execute_javascript(
         self,
@@ -316,14 +407,24 @@ class UtilityTools(ToolBase):
                 description="Require the element to be visible, not merely present in the DOM. Set false to accept a hidden element. Example: true"
             ),
         ] = True,
+        state: Annotated[
+            Literal["visible", "attached", "hidden", "detached"] | None,
+            Field(
+                description="visible, attached (in the DOM), hidden (not shown or gone) or detached (gone, e.g. a spinner). Overrides visible. Example: 'detached'"
+            ),
+        ] = None,
     ) -> ElementWaitResult:
         """Wait until an element appears on the page, polling until it does.
 
         The right way to synchronise with a single-page app after a click or
-        navigation — more reliable than wait with a guessed duration. Returns
-        how long it took, or an error naming why it never matched (absent, or
-        present but hidden, with similarly named ids as suggestions).
+        navigation — more reliable than wait with a guessed duration. state
+        hidden or detached waits for it to go away instead. Returns how long it
+        took, or an error naming why it never matched.
         """
+        want = state or ("visible" if visible else "attached")
+        if want in ("hidden", "detached"):
+            return await self._wait_gone(selector, timeout, want)
+        visible = want == "visible"
         start = time.monotonic()
         last: Exception | None = None
         handle = None
@@ -337,6 +438,7 @@ class UtilityTools(ToolBase):
                         selector=selector,
                         found=True,
                         elapsed=elapsed,
+                        state=want,
                     )
             except StaleIdError:
                 raise
@@ -362,6 +464,137 @@ class UtilityTools(ToolBase):
             f"Similar ids on the page: {', '.join(similar)}." if similar else None
         ) or "Check the selector with find_element, or raise timeout."
         raise ElementNotFoundError(f"{selector} (waited {timeout}s)", hint=hint) from last
+
+    async def _wait_gone(self, selector: str, timeout: float, want: str) -> ElementWaitResult:
+        start = time.monotonic()
+        while True:
+            present = True
+            try:
+                handle = await self.dom.resolve(selector)
+                if want == "hidden" and not await self.element_call(handle, _VISIBLE_FN):
+                    elapsed = round(time.monotonic() - start, 2)
+                    return ElementWaitResult(
+                        summary=f"{selector} is hidden after {elapsed}s",
+                        selector=selector,
+                        found=True,
+                        elapsed=elapsed,
+                        state=want,
+                    )
+            except ZendriverMCPError as exc:
+                if exc.code is Code.INVALID_ARGUMENT or "Invalid CSS selector" in str(exc):
+                    raise
+                if exc.code not in (Code.ELEMENT_NOT_FOUND, Code.STALE_ID):
+                    raise
+                present = False
+            if not present:
+                elapsed = round(time.monotonic() - start, 2)
+                return ElementWaitResult(
+                    summary=f"{selector} is gone after {elapsed}s",
+                    selector=selector,
+                    found=False,
+                    elapsed=elapsed,
+                    state=want,
+                )
+            if time.monotonic() - start >= timeout:
+                raise ZendriverMCPError(
+                    f"Timeout after {timeout}s: {selector} is still "
+                    + ("shown." if want == "hidden" else "in the page."),
+                    code=Code.TIMEOUT,
+                    hint="Raise timeout, or check what keeps it there with get_interaction_tree.",
+                )
+            await asyncio.sleep(_POLL)
+
+    async def wait_for_text(
+        self,
+        text: Annotated[
+            str,
+            Field(
+                description="Text to wait for, matched as a case-sensitive substring of the visible text. Example: 'Order confirmed'"
+            ),
+        ],
+        gone: Annotated[
+            bool,
+            Field(
+                description="Wait for the text to disappear instead, e.g. 'Loading...'. Example: false"
+            ),
+        ] = False,
+        timeout: Annotated[
+            float,
+            Field(description="Maximum seconds to wait. Example: 30.0"),
+        ] = 30.0,
+    ) -> TextWaitResult:
+        """Wait until some text shows on the page, or until it disappears.
+
+        For results with no stable selector. Reads the visible text of the page
+        and its iframes. Returns how long it took; a timeout is an error.
+        """
+        start = time.monotonic()
+        while True:
+            seen = text in await self._visible_text()
+            if seen != gone:
+                elapsed = round(time.monotonic() - start, 2)
+                return TextWaitResult(
+                    summary=f"{text!r} {'gone' if gone else 'shown'} after {elapsed}s",
+                    text=text,
+                    gone=gone,
+                    elapsed=elapsed,
+                )
+            if time.monotonic() - start >= timeout:
+                raise ZendriverMCPError(
+                    f"Timeout after {timeout}s: {text!r} is "
+                    + ("still shown." if gone else "not on the page."),
+                    code=Code.TIMEOUT,
+                    hint="Check the exact wording with get_text_content (the match is case-sensitive).",
+                )
+            await asyncio.sleep(_POLL)
+
+    async def _visible_text(self) -> str:
+        parts = [str(await self.run_js(_BODY_TEXT_JS) or "")]
+        for frame in (await self.dom.frames())[1:]:
+            try:
+                parts.append(str(await self.dom.evaluate_in(frame, _BODY_TEXT_JS) or ""))
+            except Exception:  # a frame navigating mid-read
+                continue
+        return "\n".join(parts)
+
+    async def wait_for_url(
+        self,
+        pattern: Annotated[
+            str,
+            Field(
+                description="A substring, a glob with * over the whole URL, or a /regex/. Example: '/checkout/done'"
+            ),
+        ],
+        timeout: Annotated[
+            float,
+            Field(description="Maximum seconds to wait. Example: 30.0"),
+        ] = 30.0,
+    ) -> UrlWaitResult:
+        """Wait until the tab's URL matches a pattern, after a redirect or a client-side route.
+
+        history.pushState counts. Returns the URL that matched.
+        """
+        if len(pattern) > 1 and pattern.startswith("/") and pattern.endswith("/"):
+            try:
+                re.compile(pattern[1:-1])
+            except re.error as exc:
+                raise InvalidArgumentError(f"Bad regular expression {pattern}: {exc}") from exc
+        start = time.monotonic()
+        url = ""
+        while True:
+            url = (await self.dom.main_frame()).url
+            if url_matches(url, pattern):
+                elapsed = round(time.monotonic() - start, 2)
+                return UrlWaitResult(
+                    summary=f"URL {url} after {elapsed}s", url=url, elapsed=elapsed
+                )
+            if time.monotonic() - start >= timeout:
+                raise ZendriverMCPError(
+                    f"Timeout after {timeout}s: the URL is still {url}.",
+                    code=Code.TIMEOUT,
+                    hint="A bare pattern is a substring; use * for a glob or /.../ for a regex.",
+                )
+            await asyncio.sleep(_POLL)
 
     async def run_security_audit(self) -> AuditResult:
         """Audit the loaded page's client-side security posture.

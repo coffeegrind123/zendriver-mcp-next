@@ -1,18 +1,71 @@
-(function () {
+function (...closedRoots) {
   // Runs in an ISOLATED world (src/dom.py), never the page's. Ids are kept in
   // that world's globalThis.__zd store, not written into the DOM: a
   // data-* attribute on every element is readable by any page script.
   // Ids are stable for an element's life, so one from an earlier walk still
   // works while its element exists, and a number is never reused.
+  //
+  // `closedRoots` are the page's closed shadow roots, which `el.shadowRoot`
+  // hides from script. dom.py finds them through CDP (DOM.getDocument with
+  // pierce) and passes them in, so nothing has to be hooked in the page.
   const S = globalThis.__zd;
   if (!S) throw new Error("element store missing: run via src/dom.py");
   S.prune();
 
   const vh = window.innerHeight, vw = window.innerWidth;
 
-  function vis(el) {
-    const s = getComputedStyle(el), r = el.getBoundingClientRect();
-    return s.display !== "none" && s.visibility !== "hidden" && s.opacity !== "0" && r.width > 0 && r.height > 0;
+  const closedOf = new Map();
+  for (const r of closedRoots) if (r && r.host) closedOf.set(r.host, r);
+  const shadowOf = (el) => el.shadowRoot || closedOf.get(el) || null;
+
+  // An open modal <dialog> makes everything outside it inert without any
+  // attribute saying so.
+  const modal = document.querySelector(":modal");
+  function composedContains(outer, el) {
+    for (let n = el; n; n = n.parentNode || (n instanceof ShadowRoot ? n.host : null)) {
+      if (n === outer) return true;
+    }
+    return false;
+  }
+
+  // Tree-walker verdict for one element. REJECT drops the element AND its
+  // subtree, so it is only for states a descendant cannot undo: display:none,
+  // inert, aria-hidden, opacity 0. `visibility` CAN be undone by a child
+  // (visibility:visible inside visibility:hidden shows), and a zero-size box
+  // (display:contents, a collapsed wrapper) can still have visible children,
+  // so those are SKIP: not listed, but descended into.
+  function verdict(el) {
+    if (el.inert || el.getAttribute("aria-hidden") === "true") return NodeFilter.FILTER_REJECT;
+    const s = getComputedStyle(el);
+    if (s.display === "none" || s.opacity === "0" || s.contentVisibility === "hidden") {
+      return NodeFilter.FILTER_REJECT;
+    }
+    return NodeFilter.FILTER_ACCEPT;
+  }
+
+  // Whether an accepted element is itself on screen.
+  function shown(el) {
+    if (getComputedStyle(el).visibility !== "visible") return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }
+
+  // Look an id up where the referencing element lives first: inside a shadow
+  // root, getElementById on the document cannot see it.
+  function byId(el, id) {
+    const root = el.getRootNode();
+    return (root.getElementById && root.getElementById(id)) || document.getElementById(id);
+  }
+
+  function textOf(n) {
+    return (n.innerText || n.textContent || "").trim();
+  }
+
+  // A <label>'s text without the text of the controls inside it.
+  function labelText(l) {
+    const c = l.cloneNode(true);
+    c.querySelectorAll("input,textarea,select,button").forEach(x => x.remove());
+    return textOf(c);
   }
 
   // Smart label inference - tries multiple sources
@@ -21,11 +74,12 @@
     let l = el.getAttribute("aria-label");
     if (l) return l.trim();
 
-    // aria-labelledby
+    // aria-labelledby is a LIST of ids, joined in order.
     const lblBy = el.getAttribute("aria-labelledby");
     if (lblBy) {
-      const ref = document.getElementById(lblBy);
-      if (ref) return ref.innerText.trim();
+      const t = lblBy.trim().split(/\s+/).map(id => byId(el, id)).filter(Boolean)
+        .map(textOf).filter(Boolean).join(" ");
+      if (t) return t;
     }
 
     const tag = el.tagName;
@@ -34,18 +88,11 @@
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") {
       if (el.type === "submit" || el.type === "button") return el.value || "";
 
-      // <label for="...">
-      if (el.id) {
-        const lbl = document.querySelector(`label[for="${el.id}"]`);
-        if (lbl) return lbl.innerText.trim();
-      }
-
-      // Wrapped in label
-      const pl = el.closest("label");
-      if (pl) {
-        const c = pl.cloneNode(true);
-        c.querySelectorAll("input,textarea,select").forEach(x => x.remove());
-        const t = c.innerText.trim();
+      // <label for> and a wrapping <label>, both, as the browser associates
+      // them: scoped to the element's own tree, and immune to ids that are
+      // not valid in a CSS selector.
+      for (const l of el.labels || []) {
+        const t = labelText(l);
         if (t) return t;
       }
 
@@ -157,13 +204,12 @@
   }
 
   function walk(root, out, seen) {
-    const w = document.createTreeWalker(root.shadowRoot || root, NodeFilter.SHOW_ELEMENT, {
-      acceptNode: n => vis(n) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT
-    });
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, { acceptNode: verdict });
 
     let n = w.currentNode;
     while (n) {
-      if (n !== root && interactive(n) && !skip(n, seen)) {
+      if (n !== root && interactive(n) && !skip(n, seen) && shown(n) &&
+          !(modal && !composedContains(modal, n))) {
         const label = lbl(n).replace(/\s+/g, " ").trim().slice(0, 50);
         const t = typ(n);
 
@@ -227,8 +273,10 @@
           o.ck = n.checked;
         }
 
-        // Disabled
-        if (n.disabled) o.dis = true;
+        // Required, and disabled: :disabled includes controls inside a
+        // disabled <fieldset>; aria-disabled is how custom widgets say it.
+        if (n.required || n.getAttribute("aria-required") === "true") o.req = true;
+        if ((n.matches && n.matches(":disabled")) || n.closest("[aria-disabled='true']")) o.dis = true;
 
         // Offscreen
         const rect = n.getBoundingClientRect();
@@ -239,12 +287,27 @@
         out.push(o);
       }
 
-      if (n.shadowRoot) walk(n.shadowRoot, out, seen);
+      const sr = shadowOf(n);
+      if (sr) { roots.push(sr); walk(sr, out, seen); }
       n = w.nextNode();
     }
   }
 
-  const out = [], seen = new Set();
+  const out = [], seen = new Set(), roots = [document];
   if (document.body) walk(document.body, out, seen);
+
+  // File inputs are usually hidden behind a styled button, which is why the
+  // walk above skips them, but they are what upload_file and fill_form need.
+  // Listed with hid:true so it is clear they cannot be clicked.
+  for (const root of roots) {
+    for (const f of root.querySelectorAll("input[type=file]")) {
+      if (seen.has(f) || f.disabled) continue;
+      seen.add(f);
+      const o = { id: S.idOf(f), t: "in", l: lbl(f).replace(/\s+/g, " ").trim().slice(0, 50) || "[input]",
+                  r: rgn(f), it: "file" };
+      if (!shown(f)) o.hid = true;
+      out.push(o);
+    }
+  }
   return out;
-})();
+}

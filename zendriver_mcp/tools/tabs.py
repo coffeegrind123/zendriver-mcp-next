@@ -1,8 +1,11 @@
 # tab management tools - new tab, list, switch, close
+import asyncio
 from typing import Annotated
 
-from pydantic import Field
+from pydantic import BaseModel, Field
+from zendriver import cdp
 
+from zendriver_mcp.errors import InvalidArgumentError
 from zendriver_mcp.registry import Effect, Reach
 from zendriver_mcp.response import Result
 from zendriver_mcp.tools.base import ToolBase
@@ -12,6 +15,25 @@ from zendriver_mcp.tools.browser import TabInfo
 class TabResult(Result):
     tab: str = Field(description="Id of the tab acted on.")
     url: str | None = Field(default=None, description="Its URL, when known.")
+
+
+class OpenedTab(BaseModel):
+    url: str = Field(description="The URL asked for.")
+    tab: str | None = Field(default=None, description="Id of the tab it opened in.")
+    error: str | None = Field(
+        default=None,
+        description="Why it failed: no tab, or a tab showing Chrome's error page (tab is then set).",
+    )
+
+
+class OpenedTabs(Result):
+    tabs: list[OpenedTab] = Field(description="One entry per URL, in the order given.")
+    opened: int = Field(description="How many opened and loaded.")
+
+
+# At most this many URLs per open_tabs call, and in flight at once.
+MAX_TABS_PER_CALL = 20
+MAX_CONCURRENCY = 8
 
 
 class TabList(Result):
@@ -26,6 +48,9 @@ class TabTools(ToolBase):
     def _register_tools(self) -> None:
         """register tab management tools"""
         self._register(self.new_tab, Effect.WRITE, "Open tab", reach=Reach.WEB, page_scoped=False)
+        self._register(
+            self.open_tabs, Effect.WRITE, "Open several tabs", reach=Reach.WEB, page_scoped=False
+        )
         self._register(self.list_tabs, Effect.READ, "List tabs", page_scoped=False)
         self._register(
             self.switch_tab, Effect.WRITE, "Switch tab", idempotent=True, page_scoped=False
@@ -53,6 +78,59 @@ class TabTools(ToolBase):
             summary=f"Opened new tab: {tab_id}" + (f" at {url}" if url else ""),
             tab=tab_id,
             url=getattr(tab, "url", None) or url,
+        )
+
+    async def open_tabs(
+        self,
+        urls: Annotated[
+            list[str],
+            Field(
+                description=f"Absolute URLs to open, each in its own new tab; at most {MAX_TABS_PER_CALL}. Example: ['https://example.com/a', 'https://example.com/b']"
+            ),
+        ],
+        concurrency: Annotated[
+            int,
+            Field(description=f"How many load at once, 1 to {MAX_CONCURRENCY}. Example: 4"),
+        ] = 4,
+    ) -> OpenedTabs:
+        """Open several URLs in new tabs at once, loading them in parallel.
+
+        Read each with a tool's tab argument; the active tab does not change.
+        A URL that fails is reported per entry and does not stop the others. Returns each URL's tab id or error, in the order given.
+        """
+        if not urls:
+            raise InvalidArgumentError("Pass at least one URL.")
+        if len(urls) > MAX_TABS_PER_CALL:
+            raise InvalidArgumentError(
+                f"{len(urls)} URLs; at most {MAX_TABS_PER_CALL} per call.",
+                hint="Split them over several calls.",
+            )
+        gate = asyncio.Semaphore(max(1, min(concurrency, MAX_CONCURRENCY)))
+
+        async def one(url: str) -> OpenedTab:
+            async with gate:
+                try:
+                    tab_id, tab = await self.session.create_tab(url)
+                except Exception as exc:  # one bad URL must not sink the rest
+                    return OpenedTab(url=url, error=str(exc).splitlines()[0][:300])
+                # A refused or unresolvable URL still opens a tab, on Chrome's
+                # error page, which the frame tree marks with unreachable_url.
+                try:
+                    tree = await tab.send(cdp.page.get_frame_tree())
+                except Exception:
+                    return OpenedTab(url=url, tab=tab_id)
+                if tree.frame.unreachable_url:
+                    return OpenedTab(url=url, tab=tab_id, error="the page could not be loaded")
+                return OpenedTab(url=url, tab=tab_id)
+
+        results = await asyncio.gather(*(one(u) for u in urls))
+        opened = sum(1 for r in results if r.tab and not r.error)
+        failed = len(results) - opened
+        return OpenedTabs(
+            summary=f"Opened {opened} of {len(urls)} tab(s)"
+            + (f"; {failed} failed" if failed else ""),
+            tabs=list(results),
+            opened=opened,
         )
 
     async def list_tabs(self) -> TabList:

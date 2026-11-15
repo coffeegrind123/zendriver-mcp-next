@@ -25,6 +25,7 @@ from mcp.server.mcpserver import MCPServer as FastMCP
 from pydantic import Field
 from zendriver import cdp
 
+from zendriver_mcp import submit_guard
 from zendriver_mcp.errors import AccessibilityUidError
 from zendriver_mcp.registry import Effect, Reach
 from zendriver_mcp.response import Result
@@ -297,6 +298,7 @@ class AccessibilityTools(ToolBase):
                 f"uid {uid} no longer maps to a live DOM node",
                 hint="Take a fresh get_accessibility_snapshot and use a uid from it.",
             ) from exc
+        await submit_guard.check_click(self, handle)
         x, y = await self.dom.center(handle)
         await self.dom.click(handle)
         return AxClick(

@@ -13,7 +13,7 @@ uv run ruff check . && uv run ruff format --check .
 uv run mypy zendriver_mcp
 uv run pytest
 uv run python scripts/gen_tool_docs.py --check
-DISPLAY=:99 ZENDRIVER_MCP_LIVE=1 uv run pytest tests/test_live.py   # needs Chrome + a display
+DISPLAY=:99 ZENDRIVER_MCP_LIVE=1 uv run pytest tests/test_live*.py   # needs Chrome + a display
 ```
 
 ## Adding or changing a tool

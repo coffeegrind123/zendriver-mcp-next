@@ -14,6 +14,8 @@ from zendriver_mcp.tools.catalog import Surface, install_catalog
 from zendriver_mcp.tools.content import ContentTools
 from zendriver_mcp.tools.cookies import CookieTools
 from zendriver_mcp.tools.devtools import DevToolsTools
+from zendriver_mcp.tools.dialogs import DialogTools
+from zendriver_mcp.tools.downloads import DownloadTools
 from zendriver_mcp.tools.elements import ElementTools
 from zendriver_mcp.tools.emulation import EmulationTools
 from zendriver_mcp.tools.forms import FormTools
@@ -67,6 +69,8 @@ _MODULES = [
     ("permissions", PermissionsTools),
     ("proxy", ProxyTools),
     ("interception", InterceptionTools),
+    ("dialogs", DialogTools),
+    ("downloads", DownloadTools),
 ]
 
 _TOOL_GROUPS: dict[str, list[str]] = {}
@@ -104,7 +108,16 @@ _PROFILES: dict[str, set[str]] = {
     "minimal": {"browser", "navigation", "content", "query", "elements"},
     "browse": {"browser", "navigation", "tabs", "content", "query"},
     "interact": {"browser", "navigation", "tabs", "elements", "query", "content", "forms"},
-    "scrape": {"browser", "navigation", "tabs", "content", "query", "logging", "cookies"},
+    "scrape": {
+        "browser",
+        "navigation",
+        "tabs",
+        "content",
+        "query",
+        "logging",
+        "cookies",
+        "downloads",
+    },
     "stealth": {
         "browser",
         "navigation",
@@ -163,6 +176,9 @@ def _apply_tool_filter(server: FastMCP) -> None:
         keep |= set(_TOOL_GROUPS.get(g, []))
     if narrowed:
         keep |= set(_TOOL_GROUPS.get("browser", []))  # lifecycle always available
+        # A dialog freezes its page under any profile, and the dialog_open error
+        # tells the caller to answer it, so the tools that do are always kept.
+        keep |= set(_TOOL_GROUPS.get("dialogs", []))
     else:
         keep = set(all_tools)  # ALLOW/DENY alone operate on the full set
 

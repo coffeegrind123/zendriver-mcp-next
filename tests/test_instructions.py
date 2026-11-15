@@ -20,7 +20,7 @@ def test_every_tool_named_exists() -> None:
     known = set(CATALOG) | set(META)
     named = set(re.findall(r"\b([a-z]+(?:_[a-z]+)+)\b", INSTRUCTIONS))
     # Words with underscores that are not tool names: codes and arguments.
-    not_tools = {"stale_id", "element_obscured", "target_blank"}
+    not_tools = {"stale_id", "element_obscured", "target_blank", "dialog_open", "only_changed"}
     missing = sorted(n for n in named - not_tools if n not in known)
     assert not missing, f"instructions name tools that do not exist: {missing}"
 

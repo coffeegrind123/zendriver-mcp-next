@@ -19,6 +19,8 @@ import zendriver as zd
 from zendriver import cdp
 
 from zendriver_mcp import dom as _dom
+from zendriver_mcp.dialogs import Dialogs
+from zendriver_mcp.downloads import Downloads
 from zendriver_mcp.errors import (
     BrowserNotStartedError,
     PageNotLoadedError,
@@ -33,6 +35,7 @@ from zendriver_mcp.launch import (
     resolve_headless,
     tool_timeout_budget,
 )
+from zendriver_mcp.storage_restore import PendingStorage
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +157,7 @@ class BrowserSession:
     _network_logs: list[dict[str, Any]] = []
     _console_logs: list[dict[str, Any]] = []
     _pending_requests: dict[str, dict[str, Any]] = {}
+    _by_request: dict[str, dict[str, Any]] = {}
     _cdp_enabled_tabs: dict[int, bool] = {}  # Track tabs with CDP listeners
     _proxy_username: str | None = None
     _proxy_password: str | None = None
@@ -162,6 +166,11 @@ class BrowserSession:
     _tab_listeners: list[Callable[[], None]] = []
     _interceptors: dict[int, "Interceptor"] = {}
     _fetch_state: dict[int, tuple[bool | None, list[tuple[Any, Any]]]] = {}
+    dialogs: Dialogs = Dialogs()
+    downloads: Downloads = Downloads()
+    pending_storage: PendingStorage = PendingStorage()
+    # One submit approved by allow_next_submit, used by the next guarded action.
+    submit_allowance: bool = False
 
     def __new__(cls) -> "BrowserSession":
         if cls._instance is None:
@@ -172,11 +181,15 @@ class BrowserSession:
             cls._network_logs = []
             cls._console_logs = []
             cls._pending_requests = {}
+            cls._by_request = {}
             cls._cdp_enabled_tabs = {}
             cls._reset_callbacks = []
             cls._tab_listeners = []
             cls._interceptors = {}
             cls._fetch_state = {}
+            cls.dialogs = Dialogs()
+            cls.downloads = Downloads()
+            cls.pending_storage = PendingStorage()
         return cls._instance
 
     def register_reset_callback(self, callback: ResetCallback) -> None:
@@ -279,6 +292,15 @@ class BrowserSession:
         self.discard()
         return True
 
+    async def ensure_listeners(self, tab: zd.Tab) -> None:
+        """Logging and dialog listeners on ``tab``, set up once.
+
+        Tabs the page opened itself are adopted without them; the first tool
+        that touches one sets them up.
+        """
+        if not self._cdp_enabled_tabs.get(id(tab)):
+            await self._setup_cdp_listeners(tab)
+
     def discard(self) -> None:
         """Drop a dead browser's state without touching the dead process.
 
@@ -293,10 +315,14 @@ class BrowserSession:
         self._interceptors = {}
         self._fetch_state = {}
         _dom.forget()
+        self.dialogs.reset()
+        self.downloads.reset()
+        self.pending_storage.reset()
         self._tabs_changed()
         self._network_logs = []
         self._console_logs = []
         self._pending_requests = {}
+        self._by_request = {}
         self._cdp_enabled_tabs = {}
         self._loaded_extensions = []
         self._run_reset_callbacks()
@@ -600,10 +626,21 @@ class BrowserSession:
             self._loaded_extensions = []
             await self._load_extensions(ext_dirs)
 
+            # Downloads land in a directory of ours, reported by events. A
+            # browser that refuses is still a browser: never fail the launch.
+            self.downloads.reset()
+            try:
+                await self.downloads.attach(self._browser)
+            except Exception:
+                logger.warning("download capture unavailable", exc_info=True)
+
             # Clear state on new session
+            self.dialogs.reset()
+            self.pending_storage.reset()
             self._network_logs = []
             self._console_logs = []
             self._pending_requests = {}
+            self._by_request = {}
             self._tabs = {}
             self._tab_owner = {}
             self._tab_counter = 0
@@ -634,10 +671,14 @@ class BrowserSession:
             self._interceptors = {}
             self._fetch_state = {}
             _dom.forget()
+            self.dialogs.reset()
+            self.downloads.reset()
+            self.pending_storage.reset()
             self._tabs_changed()
             self._network_logs = []
             self._console_logs = []
             self._pending_requests = {}
+            self._by_request = {}
             self._cdp_enabled_tabs = {}
             self._loaded_extensions = []
             self._run_reset_callbacks()
@@ -674,9 +715,28 @@ class BrowserSession:
             tab.add_handler(
                 cdp.network.LoadingFailed, functools.partial(self._on_loading_failed, tab_id=tid)
             )
+            tab.add_handler(cdp.network.LoadingFinished, self._on_loading_finished)
             tab.add_handler(
                 cdp.runtime.ConsoleAPICalled, functools.partial(self._on_console_api, tab_id=tid)
             )
+
+            # Dialogs: Page events, which the Page domain must be on to send.
+            await tab.send(cdp.page.enable())
+            tab.add_handler(
+                cdp.page.JavascriptDialogOpening,
+                functools.partial(self.dialogs.on_opening, tab=tab, tab_id=tid),
+            )
+            tab.add_handler(
+                cdp.page.JavascriptDialogClosed, functools.partial(self.dialogs.on_closed, tab=tab)
+            )
+
+            # localStorage restored by import_session for origins not open yet.
+            tab.add_handler(
+                cdp.page.FrameNavigated,
+                functools.partial(self.pending_storage.on_navigated, tab=tab),
+            )
+            if self.pending_storage.pending:
+                await self.pending_storage.install(tab)
 
             # Mark tab as CDP-enabled
             self._cdp_enabled_tabs[tab_id] = True
@@ -695,6 +755,8 @@ class BrowserSession:
             "timestamp": datetime.now().isoformat(),
             "type": str(event.type_) if event.type_ else "unknown",
             "tab": tab_id,
+            "request_headers": dict(event.request.headers or {}),
+            "has_post_data": bool(event.request.has_post_data),
         }
 
     async def _on_response_received(
@@ -705,6 +767,7 @@ class BrowserSession:
         pending = self._pending_requests.pop(request_id, {})
 
         log_entry = {
+            "request_id": request_id,
             "url": event.response.url,
             "method": pending.get("method", "GET"),
             "status": event.response.status,
@@ -713,13 +776,29 @@ class BrowserSession:
             "mime_type": event.response.mime_type,
             "timestamp": datetime.now().isoformat(),
             "tab": tab_id,
+            "request_headers": pending.get("request_headers", {}),
+            "has_post_data": pending.get("has_post_data", False),
+            "headers": dict(event.response.headers or {}),
         }
 
         self._network_logs.append(log_entry)
+        self._by_request[request_id] = log_entry
 
         # Keep only last 1000 entries
         if len(self._network_logs) > 1000:
+            for gone in self._network_logs[:-1000]:
+                self._by_request.pop(str(gone.get("request_id")), None)
             self._network_logs = self._network_logs[-1000:]
+
+    async def _on_loading_finished(self, event: cdp.network.LoadingFinished) -> None:
+        """Record the size of a response once its body has arrived."""
+        entry = self._by_request.get(str(event.request_id))
+        if entry is not None:
+            entry["size"] = int(event.encoded_data_length)
+            entry["finished"] = True
+
+    def network_entry(self, request_id: str) -> dict[str, Any] | None:
+        return self._by_request.get(request_id)
 
     async def _on_loading_failed(
         self, event: cdp.network.LoadingFailed, *, tab_id: str | None = None
@@ -730,6 +809,7 @@ class BrowserSession:
 
         if pending:
             log_entry = {
+                "request_id": request_id,
                 "url": pending.get("url", "unknown"),
                 "method": pending.get("method", "GET"),
                 "status": 0,
@@ -1003,6 +1083,11 @@ class BrowserSession:
                 result[tab_id] = getattr(tab, "url", "unknown")
         return result
 
+    def tab_objects(self, *, visible_only: bool = True) -> list[zd.Tab]:
+        """Open tabs as zendriver Tabs: this caller's, or every caller's."""
+        self._sync_tabs()
+        return [t for tid, t in self._tabs.items() if not visible_only or self._visible(tid)]
+
     def active_tab_id(self) -> str | None:
         page = CALL_TAB.get() or self._page
         return self.tab_id_of(page) if page is not None else None
@@ -1103,3 +1188,4 @@ class BrowserSession:
         self._network_logs = []
         self._console_logs = []
         self._pending_requests = {}
+        self._by_request = {}

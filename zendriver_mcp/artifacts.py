@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from zendriver_mcp.errors import ZendriverMCPError
+from zendriver_mcp.errors import InvalidArgumentError, ZendriverMCPError
 
 
 def _allowed_roots() -> list[Path]:
@@ -50,6 +50,13 @@ def _is_under(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _refuse_nul(file_path: str) -> None:
+    # The filesystem calls behind Path.resolve() raise ValueError on an embedded
+    # NUL, which reached the caller as an internal error.
+    if "\x00" in file_path:
+        raise InvalidArgumentError("The path contains a NUL character.")
 
 
 def resolve_artifact_path(
@@ -75,11 +82,17 @@ def resolve_artifact_path(
         target.parent.mkdir(parents=True, exist_ok=True)
         return target
 
+    _refuse_nul(file_path)
     target = Path(file_path).expanduser()
     # Resolve even if the final component doesn't exist yet.
     resolved = target.resolve()
     for root in _allowed_roots():
         if _is_under(resolved, root):
+            if resolved.is_dir():
+                raise InvalidArgumentError(
+                    f"{resolved} is a directory; give a file name inside it.",
+                    hint=f"e.g. {resolved / ('example.' + default_ext)}",
+                )
             resolved.parent.mkdir(parents=True, exist_ok=True)
             return resolved
 
@@ -101,6 +114,7 @@ def resolve_artifact_dir(file_path: str, *, default_prefix: str) -> Path:
         target = Path(tempfile.mkdtemp(prefix=f"{default_prefix}-"))
         return target
 
+    _refuse_nul(file_path)
     target = Path(file_path).expanduser().resolve()
     for root in _allowed_roots():
         if _is_under(target, root):
