@@ -141,6 +141,11 @@ def extensions_dir() -> Path:
     return candidates[0]
 
 
+# How long to wait for zendriver to create the Tab of a new page target.
+_NEW_TAB_POLLS = 40
+_NEW_TAB_POLL_SECONDS = 0.05
+
+
 class BrowserSession:
     """Singleton class to manage browser session across all tool calls."""
 
@@ -626,6 +631,11 @@ class BrowserSession:
             self._loaded_extensions = []
             await self._load_extensions(ext_dirs)
 
+            # Tabs the page opens get their listeners as soon as they exist.
+            connection = getattr(self._browser, "connection", None)
+            if connection is not None:
+                connection.add_handler(cdp.target.TargetCreated, self._on_target_created)
+
             # Downloads land in a directory of ours, reported by events. A
             # browser that refuses is still a browser: never fail the launch.
             self.downloads.reset()
@@ -688,6 +698,9 @@ class BrowserSession:
         tab_id = id(tab)
         if self._cdp_enabled_tabs.get(tab_id):
             return  # Already set up
+        # Marked before the first await: a tool and the new-tab handler can both
+        # reach here for one tab, and two sets of handlers log everything twice.
+        self._cdp_enabled_tabs[tab_id] = True
 
         try:
             # Enable Network domain
@@ -700,49 +713,78 @@ class BrowserSession:
             # interception, which registers through set_request_interceptor).
             await self._ensure_fetch(tab)
 
-            # Add event handlers, each bound to this tab's id so every log entry
-            # says which tab it came from. functools.partial of a coroutine
-            # function is still one to zendriver's dispatcher (it awaits it); a
-            # lambda would be run in a thread and its coroutine never awaited.
-            tid = self.tab_id_of(tab)
+            # Add event handlers, each told this tab's id so every log entry says
+            # which tab it came from. The id is looked up per event, not here: a
+            # tab the page opened can get its listeners before it is tracked.
             tab.add_handler(
-                cdp.network.RequestWillBeSent, functools.partial(self._on_request_sent, tab_id=tid)
+                cdp.network.RequestWillBeSent, self._for_tab(self._on_request_sent, tab)
             )
             tab.add_handler(
-                cdp.network.ResponseReceived,
-                functools.partial(self._on_response_received, tab_id=tid),
+                cdp.network.ResponseReceived, self._for_tab(self._on_response_received, tab)
             )
-            tab.add_handler(
-                cdp.network.LoadingFailed, functools.partial(self._on_loading_failed, tab_id=tid)
-            )
+            tab.add_handler(cdp.network.LoadingFailed, self._for_tab(self._on_loading_failed, tab))
             tab.add_handler(cdp.network.LoadingFinished, self._on_loading_finished)
-            tab.add_handler(
-                cdp.runtime.ConsoleAPICalled, functools.partial(self._on_console_api, tab_id=tid)
-            )
+            tab.add_handler(cdp.runtime.ConsoleAPICalled, self._for_tab(self._on_console_api, tab))
 
             # Dialogs: Page events, which the Page domain must be on to send.
             await tab.send(cdp.page.enable())
             tab.add_handler(
                 cdp.page.JavascriptDialogOpening,
-                functools.partial(self.dialogs.on_opening, tab=tab, tab_id=tid),
+                self._for_tab(functools.partial(self.dialogs.on_opening, tab=tab), tab),
             )
             tab.add_handler(
                 cdp.page.JavascriptDialogClosed, functools.partial(self.dialogs.on_closed, tab=tab)
             )
 
-            # localStorage restored by import_session for origins not open yet.
+            # localStorage restored by load_session for origins not open yet.
             tab.add_handler(
                 cdp.page.FrameNavigated,
                 functools.partial(self.pending_storage.on_navigated, tab=tab),
             )
             if self.pending_storage.pending:
                 await self.pending_storage.install(tab)
-
-            # Mark tab as CDP-enabled
-            self._cdp_enabled_tabs[tab_id] = True
         except Exception:
-            # CDP not available or failed, continue without logging
-            pass
+            # CDP not available or failed, continue without logging; a later
+            # call may try again.
+            self._cdp_enabled_tabs.pop(tab_id, None)
+
+    def _for_tab(
+        self, handler: Callable[..., Awaitable[None]], tab: zd.Tab
+    ) -> Callable[[Any], Awaitable[None]]:
+        """``handler(event, tab_id=...)``, with the tab's id as it is when the event arrives.
+
+        A coroutine function, as zendriver's dispatcher needs: it awaits those
+        and runs anything else in a thread, where a coroutine is never awaited.
+        """
+
+        async def run(event: Any) -> None:
+            await handler(event, tab_id=self.tab_id_of(tab))
+
+        return run
+
+    async def _on_target_created(self, event: cdp.target.TargetCreated) -> None:
+        """Set up listeners on a tab the page opened, before any tool touches it.
+
+        Before this a popup got its dialog and log listeners only when a tool
+        first acted on it, so an alert it raised on load went unrecorded and the
+        popup sat frozen with nothing saying why.
+        """
+        if event.target_info.type_ != "page":
+            return
+        # From a task: this runs on zendriver's receive loop, and zendriver
+        # creates the Tab object from the same event.
+        asyncio.get_running_loop().create_task(self._listen_when_ready(event.target_info.target_id))
+
+    async def _listen_when_ready(self, target_id: cdp.target.TargetID) -> None:
+        for _ in range(_NEW_TAB_POLLS):
+            browser = self._browser
+            if browser is None:
+                return
+            tab = next((t for t in browser.tabs if t.target_id == target_id), None)
+            if tab is not None:
+                await self.ensure_listeners(tab)
+                return
+            await asyncio.sleep(_NEW_TAB_POLL_SECONDS)
 
     async def _on_request_sent(
         self, event: cdp.network.RequestWillBeSent, *, tab_id: str | None = None
