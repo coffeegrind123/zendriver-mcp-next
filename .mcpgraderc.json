@@ -1,8 +1,26 @@
 {
-  "roles": { "search_tools": "search" },
+  "roles": {
+    "search_tools": "search"
+  },
   "exceptions": [
-    { "rule": "T001", "reason": "Core surface is 19 tools by design; ~80 more stay behind search_tools. Size is held by tests/test_schema_budget.py." },
-    { "rule": "P008", "reason": "Browser actions cannot be de-duplicated by the server: a page cannot tell a retried click from a new one, so an idempotency key would promise what it cannot deliver." },
-    { "rule": "P009", "tool": "execute_javascript", "reason": "Page JavaScript cannot be sandboxed read-only; the dedicated read tools (get_text_content, get_interaction_tree, screenshot) are the read-only path." }
+    {
+      "rule": "S008",
+      "reason": "Every parameter description ends in 'Example: ...' (enforced by tests/test_tool_standards.py); S008 only recognises 'e.g.' or an examples key."
+    },
+    {
+      "rule": "P008",
+      "tool": "execute_javascript",
+      "reason": "Browser actions cannot be replayed safely by id: a repeated click or script is a new action in a page that has changed."
+    },
+    {
+      "rule": "P008",
+      "tool": "batch",
+      "reason": "Browser actions cannot be replayed safely by id: a repeated click or script is a new action in a page that has changed."
+    },
+    {
+      "rule": "P009",
+      "tool": "execute_javascript",
+      "reason": "Page JavaScript cannot be confined to reads; the read tools (get_text_content, get_interaction_tree, find_element) are the read-only route."
+    }
   ]
 }

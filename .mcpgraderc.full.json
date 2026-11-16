@@ -1,0 +1,49 @@
+{
+  "roles": {
+    "search_tools": "search"
+  },
+  "exceptions": [
+    {
+      "rule": "D005",
+      "tool": "find_inputs",
+      "reason": "'placeholder' is the HTML attribute the tool reads labels from, not leftover text."
+    },
+    {
+      "rule": "D005",
+      "tool": "fill_form",
+      "reason": "'placeholder' is the HTML attribute fields are matched by, not leftover text."
+    },
+    {
+      "rule": "S007",
+      "tool": "write_cookie",
+      "reason": "The parameters are CDP's cookie fields (name, value, domain, path, expires, secure, httpOnly, sameSite), each optional past name and value; grouping them would hide the one-to-one mapping."
+    },
+    {
+      "rule": "S008",
+      "reason": "Every parameter description ends in 'Example: ...' (enforced by tests/test_tool_standards.py); S008 only recognises 'e.g.' or an examples key."
+    },
+    {
+      "rule": "P008",
+      "tool": "execute_javascript",
+      "reason": "Browser actions cannot be replayed safely by id: a repeated click or script is a new action in a page that has changed."
+    },
+    {
+      "rule": "P008",
+      "tool": "batch",
+      "reason": "Browser actions cannot be replayed safely by id: a repeated click or script is a new action in a page that has changed."
+    },
+    {
+      "rule": "P009",
+      "tool": "execute_javascript",
+      "reason": "Page JavaScript cannot be confined to reads; the read tools (get_text_content, get_interaction_tree, find_element) are the read-only route."
+    },
+    {
+      "rule": "T001",
+      "reason": "Full surface only (ZENDRIVER_MCP_SURFACE=full, opt-in). The default surface lists 19 tools and is graded against the budget without this exception."
+    },
+    {
+      "rule": "T004",
+      "reason": "Full surface only (opt-in). By default 19 tools are listed and the rest are reached through search_tools/call_tool."
+    }
+  ]
+}
