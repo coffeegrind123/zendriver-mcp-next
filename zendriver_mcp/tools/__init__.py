@@ -81,7 +81,14 @@ for _group, _cls in _MODULES:
     _TOOL_GROUPS[_group] = sorted(set(mcp._tool_manager._tools) - _before)
 
 
-def _declare_explicit_required(server: FastMCP) -> None:
+def _every_tool(server: FastMCP, catalog: dict[str, Any]) -> list[Any]:
+    """The listed tools plus those reached through call_tool and describe_tool."""
+    tools = {t.name: t for t in server._tool_manager.list_tools()}
+    tools.update(catalog)
+    return list(tools.values())
+
+
+def _declare_explicit_required(tools: list[Any]) -> None:
     """Emit an explicit "required" array on every tool schema.
 
     pydantic omits "required" entirely when every parameter has a default, so a
@@ -89,10 +96,59 @@ def _declare_explicit_required(server: FastMCP) -> None:
     say". The empty array states it outright. Do not remove: it cannot be
     expressed from the function signatures.
     """
-    for tool in server._tool_manager.list_tools():
+    for tool in tools:
         params = tool.parameters
         if isinstance(params, dict) and params.get("type") == "object" and "required" not in params:
             params["required"] = []
+
+
+def _compact(node: Any) -> Any:
+    """Drop schema bytes a model cannot use, in place; returns the node.
+
+    - "title" annotations: pydantic adds one per parameter and model ("Filter
+      Type" for filter_type), repeating the name. Only string values are
+      removed, so a property that is itself called "title" stays.
+    - anyOf [X, null] with default null, pydantic's form for an optional
+      parameter, becomes plain X: optional means "may be omitted". Arguments
+      are still validated by the pydantic model, which accepts an explicit null,
+      and results are dumped with exclude_none, so null never appears there.
+
+    Measured 2026-11-15 (mcpgrade): 8.7 KB of the full surface's 69.6 KB of
+    input schemas, and the anyOf form fails client checks the plain one passes.
+    """
+    if isinstance(node, list):
+        for item in node:
+            _compact(item)
+        return node
+    if not isinstance(node, dict):
+        return node
+    if isinstance(node.get("title"), str):
+        del node["title"]
+    alts = node.get("anyOf")
+    if isinstance(alts, list) and {"type": "null"} in alts:
+        rest = [a for a in alts if a != {"type": "null"}]
+        if len(rest) == 1 and isinstance(rest[0], dict):
+            del node["anyOf"]
+            for k, v in rest[0].items():
+                node.setdefault(k, v)
+        else:
+            node["anyOf"] = rest
+    if "default" in node and node["default"] is None:
+        del node["default"]
+    for key, value in list(node.items()):
+        if key == "properties" and isinstance(value, dict):
+            for prop in value.values():
+                _compact(prop)
+        elif isinstance(value, dict | list):
+            _compact(value)
+    return node
+
+
+def _compact_schemas(tools: list[Any]) -> None:
+    for tool in tools:
+        _compact(tool.parameters)
+        if tool.output_schema:
+            _compact(tool.output_schema)
 
 
 def _split_env(name: str) -> set[str]:
@@ -217,6 +273,8 @@ def _surface() -> Surface:
 
 CATALOG = install_catalog(mcp, _surface())
 install_resources(mcp)
-_declare_explicit_required(mcp)
+_ALL_TOOLS = _every_tool(mcp, CATALOG)
+_compact_schemas(_ALL_TOOLS)
+_declare_explicit_required(_ALL_TOOLS)
 
 __all__ = ["mcp", "CATALOG", "ToolBase"]

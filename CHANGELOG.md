@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Tool schemas no longer carry pydantic's `title` annotations or the `anyOf [X, null]` form
+  for optional parameters: an optional parameter may be omitted (an explicit null is still
+  accepted). Every tool, listed or reached through `call_tool`, states its `required` list.
 - `execute_js` is renamed `execute_javascript`. Calls to the old name through
   `call_tool`, `batch` or `jobs` fail with `unknown_tool` and a hint naming the new one.
 
