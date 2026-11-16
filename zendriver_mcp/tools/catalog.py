@@ -98,9 +98,9 @@ class SearchResult(Result):
 
 
 class ToolDescription(Result):
-    name: str
-    title: str
-    description: str
+    name: str = Field(description="The tool's exact name, for call_tool.")
+    title: str = Field(description="Its human-readable title.")
+    description: str = Field(description="What it does, when to use it, and what it returns.")
     input_schema: dict[str, Any] = Field(description="JSON Schema of the arguments.")
     output_schema: dict[str, Any] | None = Field(
         default=None, description="JSON Schema of the result."
@@ -110,8 +110,8 @@ class ToolDescription(Result):
 
 class StepOutcome(BaseModel):
     index: int = Field(description="Step number, as $N references use it.")
-    tool: str
-    ok: bool
+    tool: str = Field(description="The tool the step called.")
+    ok: bool = Field(description="Whether the step succeeded.")
     result: dict[str, Any] | None = Field(default=None, description="The step's structured result.")
     text: str | None = Field(
         default=None, description="The step's text, when it had no structured result."
@@ -119,11 +119,11 @@ class StepOutcome(BaseModel):
     error: dict[str, Any] | None = Field(
         default=None, description="{error, code, hint} when it failed."
     )
-    seconds: float
+    seconds: float = Field(description="How long the step took.")
 
 
 class BatchResult(Result):
-    steps: list[StepOutcome]
+    steps: list[StepOutcome] = Field(description="Each step's outcome, in order.")
     completed: int = Field(description="Steps that succeeded.")
     failed_at: int | None = Field(
         default=None, description="Index of the step that stopped the batch."
@@ -138,14 +138,16 @@ class JobState(Enum):
 
 
 class JobView(BaseModel):
-    id: str
-    tool: str
+    id: str = Field(description="Job id, for jobs get, wait and cancel.")
+    tool: str = Field(description="The tool the job runs.")
     state: str = Field(description="working, completed, failed or cancelled.")
-    progress: float | None = None
-    total: float | None = None
+    progress: float | None = Field(
+        default=None, description="Progress so far, in the tool's units."
+    )
+    total: float | None = Field(default=None, description="Progress at completion, when known.")
     message: str | None = Field(default=None, description="Latest progress message.")
     started: float = Field(description="Unix time the job started.")
-    finished: float | None = None
+    finished: float | None = Field(default=None, description="Unix time it finished.")
     result: dict[str, Any] | None = Field(
         default=None, description="Structured result, once completed."
     )
@@ -156,7 +158,9 @@ class JobView(BaseModel):
 
 
 class JobsResult(Result):
-    jobs: list[JobView]
+    jobs: list[JobView] = Field(
+        description="The affected jobs: id, state, progress, and result once finished."
+    )
 
 
 # ---------------------------------------------------------------------------

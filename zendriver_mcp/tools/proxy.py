@@ -115,6 +115,7 @@ class ProxyTools(ToolBase):
 
         Every open tab is closed by the restart. ``headless`` is accepted and
         ignored, as everywhere else.
+        Returns the proxy now in force (none) once the browser has restarted.
         """
         session = self.session
         await session.stop()

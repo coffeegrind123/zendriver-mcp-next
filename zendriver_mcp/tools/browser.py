@@ -43,7 +43,7 @@ class BrowserTools(ToolBase):
         headless: Annotated[
             bool,
             Field(
-                description="Accepted and IGNORED — this server always launches headed. Headless is the first thing bot detection looks for (Cloudflare's Turnstile rejects the click outright), so true is redirected to headed and the reply says so. Example: false"
+                description="IGNORED: this server always launches headed, because headless is what bot detection looks for. Example: false"
             ),
         ] = False,
         proxy: Annotated[
@@ -61,13 +61,13 @@ class BrowserTools(ToolBase):
         low_memory: Annotated[
             bool,
             Field(
-                description="Opt-in Chrome flags for constrained or containerised hosts (--disable-dev-shm-usage, --disable-gpu, first-run skips). REQUIRED on root/Docker hosts with a small /dev/shm or no GPU, where the browser otherwise fails to connect. WARNING: detectable as automation (software WebGL) — leave false when stealth matters. Example: false"
+                description="Container flags (--disable-dev-shm-usage, --disable-gpu); needed on root/Docker hosts with a small /dev/shm or no GPU. Detectable (software WebGL), so off unless Chrome will not start. Example: false"
             ),
         ] = False,
         window_size: Annotated[
             str | None,
             Field(
-                description="Viewport size as 'WIDTHxHEIGHT' or 'WIDTH,HEIGHT'. Omitted, Chrome uses its headless default of roughly 800x600, which is why screenshots come out small. Example: '1440x900'"
+                description="Viewport as 'WIDTHxHEIGHT'; omitted, it is about 800x600. Example: '1440x900'"
             ),
         ] = None,
         device_scale_factor: Annotated[

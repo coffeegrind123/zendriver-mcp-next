@@ -99,7 +99,7 @@ class FormTools(ToolBase):
         when needed, picking a group's or combobox's option, arrow keys for
         selects and ranges, typed dates and times, files. Colour, month and
         week inputs, and any field the trusted route missed, are set by script
-        and reported trusted=false. Each field reports filled, missing,
+        and reported trusted=false. Returns each field as filled, missing,
         ambiguous (never guessed) or failed. Does not submit.
         """
         specs: list[FieldSpec] = []
@@ -174,6 +174,7 @@ class FormTools(ToolBase):
         validation run the way they do for a user. On JavaScript-driven forms,
         clicking the actual submit button or press_enter is still the most
         faithful option. Fails when the selector does not match a <form>.
+        Returns the form and the method used.
         """
         form = await self.element_call(selector, _FORM_OF_FN)
         if form is None:
@@ -221,12 +222,10 @@ class FormTools(ToolBase):
     ) -> KeyResult:
         """Press one key as a real keyboard event, with its native effect.
 
-        The browser produces keydown, keypress (for printable keys) and keyup,
-        all trusted, and does what the key does: Enter submits the enclosing
-        form or activates a focused button, Tab moves focus, Backspace deletes.
-        Use when a framework listens for key events that type_text's bulk insert
-        does not fire. Focuses selector first when given. Returns the key
-        pressed and the element focused first, if any.
+        Trusted keydown/keyup, with the key's own effect (Enter submits or
+        activates, Tab moves focus). Use when a page listens for keys that
+        type_text does not fire. Focuses selector first when given. Returns the
+        key and the element focused, if any.
         """
         mods = modifier_bits(modifiers)
         key_definition(key)  # an unknown key fails before anything is focused
@@ -250,6 +249,7 @@ class FormTools(ToolBase):
         A convenience wrapper for press_key('Enter'); use that for any other key.
         More faithful than submit_form on JavaScript-driven forms, because the
         browser performs the implicit submission itself.
+        Returns the key pressed and the element focused first, if any.
         """
         return await self.press_key("Enter", selector)
 
@@ -281,7 +281,7 @@ class FormTools(ToolBase):
         selectable — prefer click for anything with a selector or numeric id,
         since coordinates break whenever the layout shifts. The point must be
         within the current viewport; scroll first if not. Reports what element
-        sat at that point.
+        sat at that point. Returns the point and the element that was hit there.
         """
         await submit_guard.check_point(self, x, y)
         page = self.session.page

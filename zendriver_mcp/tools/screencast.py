@@ -125,6 +125,7 @@ class ScreencastTools(ToolBase):
         Chrome sends a frame whenever the page repaints, so a static page
         produces few frames. Stop with stop_screencast, then turn the frames
         into a video with export_screencast_mp4. One recording at a time.
+        Returns where frames are written, their format and the tab.
         """
         if self._frame_dir is not None:
             raise ZendriverMCPError(
@@ -189,6 +190,7 @@ class ScreencastTools(ToolBase):
 
         Stops the recording on the tab it was started on. Pass the returned
         directory to export_screencast_mp4 to make a video.
+        Returns the frames' directory, their count and format.
         """
         if self._frame_dir is None or self._handler is None:
             raise ZendriverMCPError(
@@ -227,7 +229,7 @@ class ScreencastTools(ToolBase):
         """Report whether the ``ffmpeg`` CLI is installed, and its version.
 
         export_screencast_mp4 needs it; check first to tell the user what to
-        install instead of failing mid-task.
+        install instead of failing mid-task. Returns whether it is available, its path and version.
         """
         binary = shutil.which("ffmpeg")
         if not binary:
@@ -276,6 +278,7 @@ class ScreencastTools(ToolBase):
         Reads the frame-NNNNNN.jpg/png files start_screencast wrote, reports
         progress per encoded frame, and publishes the video as a
         browser://artifacts/ resource. Requires ffmpeg.
+        Returns the video file, its frame count, fps and size.
         """
         binary = shutil.which("ffmpeg")
         if not binary:

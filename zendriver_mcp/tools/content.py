@@ -192,13 +192,10 @@ class ContentTools(ToolBase):
     ) -> TextPage:
         """Get the page's visible text, without any HTML markup.
 
-        Use for reading or extracting page copy. Text hidden by CSS is excluded,
-        and no selectors are returned, so use get_interaction_tree if you intend
-        to interact. Same pagination contract as get_content. An empty result
-        carries a diagnosis saying whether the page is still loading, has no
-        body, keeps its text in shadow roots, or really is blank. Text inside
-        iframes follows, each under a "--- frame N (url) ---" line.
-        Returns one page of text plus the offset to continue from.
+        For reading copy; to interact, use get_interaction_tree. Hidden text is
+        excluded. An empty result says why (still loading, no body, or blank).
+        Iframe text follows under "--- frame N (url) ---" lines. Returns one
+        page of text plus the offset to continue from.
         """
         # Null-safe on purpose. `document.body.innerText` THROWS when the body
         # does not exist yet, and a thrown CDP exception reaches the caller as a
@@ -325,7 +322,7 @@ class ContentTools(ToolBase):
         links: Annotated[
             bool,
             Field(
-                description="Include each link's target as 'h' (a path when same-origin). Off by default because it roughly doubles the output; turn it on when you need to follow or identify a link. Example: true"
+                description="Add each link's target as 'h' (a path when same-origin), to follow it with navigate; roughly doubles the output. Example: true"
             ),
         ] = False,
         only_changed: Annotated[
@@ -343,23 +340,11 @@ class ContentTools(ToolBase):
     ) -> InteractionTree:
         """List the page's interactive elements, each with a short numeric id.
 
-        The cheapest way to see what can be clicked or typed into: it walks the
-        DOM, open shadow roots and iframes for buttons, links, and inputs; an
-        element inside an iframe carries its frame number as f. The numeric ids
-        it assigns are accepted directly by click, type_text, and the other
-        element tools in place of a CSS selector. An id stays valid while its
-        element exists, survives later walks, and expires on navigation; an
-        expired one fails with stale_id. The walk runs in an isolated world and
-        leaves no trace in the page. Returns the elements (capped at limit),
-        the total, and whether the cap cut the list short.
-
-        only_changed=true after an action shows just its effect (exact, since
-        ids are stable); a new page gets the full tree.
-
-        links=true adds each link's target as `h` (a path when same-origin),
-        so a link can be followed with navigate; off by default because it
-        roughly doubles the output. javascript:, bare "#" and same-page links
-        get none.
+        The cheapest view of what can be clicked or typed into, across shadow
+        roots and iframes (f is the frame number). Ids work in place of a CSS
+        selector in every element tool, last while the element exists, and
+        expire on navigation (stale_id). Leaves no trace in the page. Returns
+        the elements (capped at limit), the total, and whether the cap cut it.
         """
         tree, frames = await self._walk(closed_shadow=closed_shadow)
         # The walker always collects link targets; whether the CALLER pays for
@@ -452,7 +437,7 @@ class ContentTools(ToolBase):
         Use to bring something below the fold into view or to trigger lazy
         loading at a known point. click scrolls on its own, so this is not
         needed before clicking. Fails with element_not_found when the selector
-        matches nothing.
+        matches nothing. Returns the target and the scroll position afterwards.
         """
         y = await self.element_call(
             selector,

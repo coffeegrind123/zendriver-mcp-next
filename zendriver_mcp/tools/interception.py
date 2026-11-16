@@ -309,7 +309,7 @@ class InterceptionTools(ToolBase):
         """Remove one interception rule by id, or all of them.
 
         A tab whose last rule is removed stops intercepting entirely, so its
-        requests flow normally again.
+        requests flow normally again. Returns the ids removed and how many rules remain.
         """
         async with self._lock:
             if rule_id is None:

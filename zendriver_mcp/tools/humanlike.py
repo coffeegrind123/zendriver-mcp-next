@@ -95,7 +95,7 @@ class HumanInputTools(ToolBase):
         the text, inside nested shadow roots when needed. Slower than click;
         use it where bot detection watches pointer movement. Like click, it
         refuses with element_obscured when something covers the target, unless
-        force is set.
+        force is set. Returns the point clicked and the target's tree id.
         """
         if selector:
             handle = await self.resolve(selector)
@@ -151,6 +151,7 @@ class HumanInputTools(ToolBase):
         If selector is given the element is first clicked with human_click.
         Takes roughly estimated_typing_duration seconds; long texts can run
         into the tool's time budget, so split them.
+        Returns how many characters were typed and at what speed.
         """
         if wpm < 1:
             raise InvalidArgumentError("wpm must be at least 1.")
@@ -168,10 +169,11 @@ class HumanInputTools(ToolBase):
             int, Field(description="Typing speed in words per minute. Example: 220")
         ] = 220,
     ) -> DurationResult:
-        """Return the expected seconds human_type needs for char_count characters.
+        """Estimate the typing duration human_type needs for char_count characters.
 
         Useful for scheduling follow-up actions, or for splitting a long text so
-        each human_type call stays inside the tool's time budget.
+        each human_type call stays inside the tool's time budget. Returns the
+        expected seconds.
         """
         if wpm < 1 or char_count < 0:
             raise InvalidArgumentError("char_count must be >= 0 and wpm >= 1.")

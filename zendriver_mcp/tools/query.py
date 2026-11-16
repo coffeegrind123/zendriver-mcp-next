@@ -440,6 +440,7 @@ class QueryTools(ToolBase):
         Use to extract a single value — a price, a status, a heading — instead of
         pulling the whole page with get_text_content. Falls back to textContent
         for elements that are not rendered. The text is empty when it has none.
+        Returns the element's visible text.
         """
         text = await self.element_call(
             selector, "function(el) { return (el.innerText || el.textContent || '').trim(); }"
@@ -464,6 +465,7 @@ class QueryTools(ToolBase):
         Use for values that are not visible text — href, src, value, data-*,
         aria-*. Reports whether the attribute is present and its raw value as
         written in the markup (a relative href stays relative).
+        Returns whether the attribute is present and its value.
         """
         value = await self.element_call(
             selector,

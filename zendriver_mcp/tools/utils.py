@@ -176,13 +176,13 @@ class UtilityTools(ToolBase):
         save_path: Annotated[
             str | None,
             Field(
-                description="Path to also write the image to on the server's filesystem, at FULL resolution. The extension picks the format: .png, .gif, and .bmp are saved losslessly, anything else as JPEG. Omit to return the image without writing a file. Example: '/tmp/page.png'"
+                description="Also save the image here at full resolution; .png/.gif/.bmp lossless, else JPEG. Example: '/tmp/page.png'"
             ),
         ] = None,
         full_resolution: Annotated[
             bool,
             Field(
-                description="Return the image without downscaling. By default the returned image is capped at 1024px wide to save vision tokens; set true when you need to read fine detail. Example: false"
+                description="Return it without downscaling to 1024px wide, for fine detail. Example: false"
             ),
         ] = False,
         full_page: Annotated[
@@ -198,13 +198,10 @@ class UtilityTools(ToolBase):
     ) -> ScreenshotResult:
         """Take a screenshot of the visible viewport as an image you can look at directly.
 
-        The fastest way to understand a page's actual layout when selectors and
-        text are not enough. Set window_size and device_scale_factor on
-        start_browser first — the default viewport is roughly 800x600, which is
-        why screenshots come out small. The returned image is JPEG quality 60,
-        downscaled to 1024px wide unless full_resolution is set; save_path files
-        keep full resolution and are also published as a resource. Returns the
-        image plus its returned and full dimensions and any saved file.
+        For layout that selectors and text do not show. The image is JPEG,
+        at most 1024px wide unless full_resolution; save_path keeps full
+        resolution. Small images mean a small viewport: set window_size on
+        start_browser. Returns the image, its sizes and any saved file.
         """
         if full_page and selector:
             raise InvalidArgumentError("Pass full_page or selector, not both.")
@@ -326,14 +323,11 @@ class UtilityTools(ToolBase):
     ) -> JsResult:
         """Execute JavaScript in the page's own context and return its value as JSON.
 
-        The escape hatch for anything the dedicated tools do not cover: reading
-        page globals, calling page functions, extracting structured data in one
-        pass. Takes an expression, or a statement block that uses `return` (run
-        as the body of an async function, so `await` works too). It runs in the
-        page's main world, so it sees the page's variables and the page could
-        in principle observe it; prefer the dedicated tools where they apply.
-        Nothing is rolled back: whatever the script changed before it threw
-        stays, and a script that times out may still be running in the page.
+        For what the dedicated tools do not cover: page globals, page functions,
+        one-pass extraction. Takes an expression, or statements ending in
+        `return` (an async function body, so `await` works). Runs in the page's
+        world, where the page could observe it. Nothing is rolled back: changes
+        before an error stay, and a timed-out script may still be running.
         """
         if not 1 <= timeout <= MAX_JS_TIMEOUT:
             raise InvalidArgumentError(

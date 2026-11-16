@@ -257,10 +257,11 @@ class AccessibilityTools(ToolBase):
     async def describe_uid(
         self, uid: Annotated[str, Field(description=UID_DESCRIPTION)]
     ) -> AxNodeInfo:
-        """Return the role, name and DOM node id cached for an accessibility uid.
+        """Describe an accessibility uid: its role, name and DOM node id.
 
-        Reads the last snapshot only; it does not touch the page. Fails with a
-        stale_id error if the uid is not in the latest snapshot.
+        Reads the last snapshot only; it does not touch the page. Returns the
+        cached role, name and node id; fails with stale_id if the uid is not in
+        the latest snapshot.
         """
         entry = self._entry(uid)
         return AxNodeInfo(
@@ -279,7 +280,7 @@ class AccessibilityTools(ToolBase):
         The click is dispatched as CDP mouse input at the node's centre, after
         scrolling it into view, so the page sees an ordinary user click. Fails
         if the uid is unknown, its node was removed since the snapshot, or
-        something else covers it.
+        something else covers it. Returns the node's role and name and the point clicked.
         """
         entry = self._entry(uid)
         if entry.backend_node_id == 0:

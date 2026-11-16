@@ -83,7 +83,7 @@
 
 | Tool | Effect | Tab | Listed | Parameters | Summary |
 |---|---|---|---|---|---|
-| `estimated_typing_duration` | read |  |  | `char_count`, `wpm?` | Return the expected seconds human_type needs for char_count characters. |
+| `estimated_typing_duration` | read |  |  | `char_count`, `wpm?` | Estimate the typing duration human_type needs for char_count characters. |
 | `human_click` | write | tab |  | `selector?`, `text?`, `move_duration?`, `force?` | Click an element after moving the cursor along a curved, humanish path. |
 | `human_type` | write | tab |  | `text`, `selector?`, `wpm?` | Type text one character at a time with human keystroke timing. |
 
@@ -139,7 +139,7 @@
 | `block_urls` | write | tab |  | `patterns` | Block this tab's future requests whose URL matches any pattern. |
 | `bypass_service_worker` | write | tab |  | `bypass?` | Make this tab skip its service worker and always go to the network. |
 | `set_extra_headers` | write | tab |  | `headers` | Add headers to every outgoing request from this tab. |
-| `unblock_all_urls` | write | tab |  | none | Remove every URL-pattern block on this tab. |
+| `unblock_all_urls` | write | tab |  | none | Unblock all URLs on this tab: remove every pattern block_urls added. |
 
 ## Request interception
 
@@ -196,7 +196,7 @@
 | Tool | Effect | Tab | Listed | Parameters | Summary |
 |---|---|---|---|---|---|
 | `click_by_uid` | write | tab |  | `uid` | Click the DOM node behind an accessibility uid with a real (trusted) click. |
-| `describe_uid` | read | tab |  | `uid` | Return the role, name and DOM node id cached for an accessibility uid. |
+| `describe_uid` | read | tab |  | `uid` | Describe an accessibility uid: its role, name and DOM node id. |
 | `get_accessibility_snapshot` | read | tab |  | `max_nodes?`, `interesting_only?` | Return the page's accessibility tree with stable uids. |
 
 ## Tracing and memory

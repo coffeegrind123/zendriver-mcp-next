@@ -127,7 +127,10 @@ class PermissionsTools(ToolBase):
         )
 
     async def reset_permissions(self) -> Result:
-        """Reset every permission override in the browser context to Chrome's defaults."""
+        """Reset every permission override in the browser context to Chrome's defaults.
+
+        Returns a confirmation.
+        """
         await _connection(self.session).send(cdp.browser.reset_permissions())
         return Result(summary="Permissions reset to defaults")
 

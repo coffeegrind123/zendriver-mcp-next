@@ -121,7 +121,7 @@ class DevToolsTools(ToolBase):
 
         Only one trace can run at a time; end it with stop_trace, which writes
         a file DevTools' Performance panel can load. Fails with a conflict
-        error if a trace is already running.
+        error if a trace is already running. Returns the categories recorded and the tab.
         """
         if self._trace_events is not None:
             raise TracingError("A trace is already in progress.", hint="Call stop_trace first.")

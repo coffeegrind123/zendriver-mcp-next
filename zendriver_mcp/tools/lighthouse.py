@@ -80,6 +80,7 @@ class LighthouseTools(ToolBase):
 
         Use before run_lighthouse to tell the user to install it
         (`npm i -g lighthouse`, needs Node) instead of failing mid-task.
+        Returns whether it is available, its path and version.
         """
         binary = shutil.which("lighthouse")
         if not binary:

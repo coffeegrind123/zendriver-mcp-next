@@ -86,7 +86,10 @@ class NetworkControlTools(ToolBase):
         return BlockList(summary=summary, patterns=patterns)
 
     async def unblock_all_urls(self) -> BlockList:
-        """Remove every URL-pattern block on this tab."""
+        """Unblock all URLs on this tab: remove every pattern block_urls added.
+
+        Returns the block list, now empty.
+        """
         await self.session.page.send(cdp.network.set_blocked_ur_ls(urls=[]))
         return BlockList(summary="URL block-list cleared", patterns=[])
 
@@ -103,7 +106,7 @@ class NetworkControlTools(ToolBase):
 
         Useful for API keys, tenant overrides, tracing ids. Replaces the
         previous set; pass {} to clear. Note that unusual headers are visible to
-        the sites you visit.
+        the sites you visit. Returns the headers now sent.
         """
         if any(not k for k in headers):
             raise InvalidArgumentError("header names must not be empty")
@@ -124,7 +127,7 @@ class NetworkControlTools(ToolBase):
         """Make this tab skip its service worker and always go to the network.
 
         Use when a cached service worker hides the real responses you want to
-        observe or intercept.
+        observe or intercept. Returns whether the bypass is now on.
         """
         await self.session.page.send(cdp.network.set_bypass_service_worker(bypass=bypass))
         return ServiceWorkerBypass(summary=f"Service worker bypass: {bypass}", bypass=bypass)

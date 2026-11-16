@@ -119,14 +119,11 @@ class ElementTools(ToolBase):
     ) -> ElementResult:
         """Click one element, located by selector, numeric id, or visible text.
 
-        Pass exactly one of selector or text. The click is a real mouse event
-        (move, press, release at the element's centre, scrolled into view), so
-        the page sees exactly what a user's click produces. Numeric ids come
-        from get_interaction_tree and are the most reliable route on complex
-        pages; an id stays valid while its element exists and expires on
-        navigation. Fails with element_obscured, naming what is on top, when
-        another element covers the target; pass force=true to click anyway.
-        Returns the target, its tag, and its numeric id when matched by text.
+        Pass selector or text. A real mouse event at the element's centre,
+        scrolled into view, so the page sees a user's click. Ids from
+        get_interaction_tree are the most reliable on complex pages. Fails with
+        element_obscured, naming the cover, when something is on top; force=true
+        clicks anyway. Returns the target, its tag, and its id when matched by text.
         """
         if selector:
             # Tag first: the click may navigate, and then the element is gone.
@@ -254,7 +251,7 @@ class ElementTools(ToolBase):
 
         Use before type_text to replace a value rather than append to it.
         Selects all and deletes through the editing pipeline, so the page sees a
-        real edit and its input handlers fire.
+        real edit and its input handlers fire. Returns the target, its tag and its tree id.
         """
         handle = await self.resolve(selector)
         await self.dom.focus(handle)
@@ -278,7 +275,7 @@ class ElementTools(ToolBase):
 
         Use before press_key when a click would trigger unwanted behaviour, or to
         open a widget that reacts to focus. type_text focuses on its own, so this
-        is not needed first.
+        is not needed first. Returns the target, its tag and its tree id.
         """
         handle = await self.dom.focus(selector)
         return ElementResult(
@@ -309,7 +306,7 @@ class ElementTools(ToolBase):
         real options in the hint. The input/change events it dispatches are
         isTrusted:false (a native <select> has no trusted path short of driving
         it by keyboard: focus_element, then press_key ArrowDown/Enter), which a
-        page checking event.isTrusted can notice.
+        page checking event.isTrusted can notice. Returns the target, with the option chosen in the summary.
         """
         handle = await self.resolve(selector)
         result = await self.element_call(
@@ -365,7 +362,7 @@ class ElementTools(ToolBase):
         """Attach a local file to a file input, without opening the OS file picker.
 
         The path must exist on the server's filesystem. Submit the surrounding
-        form afterwards with submit_form or click.
+        form afterwards with submit_form or click. Returns the target, its tag and its tree id.
         """
         if not os.path.isfile(file_path):
             raise InvalidArgumentError(

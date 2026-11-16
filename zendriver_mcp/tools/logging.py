@@ -376,7 +376,7 @@ class LoggingTools(ToolBase):
         """Discard all captured network and console logs, for every tab.
 
         Call before an action so the logs that follow contain only that action's
-        traffic — much easier to read than filtering a long history.
+        traffic — much easier to read than filtering a long history. Returns a confirmation.
         """
         self.session.clear_logs()
         return Result(summary="Cleared all logs")
@@ -401,6 +401,7 @@ class LoggingTools(ToolBase):
         own. Use wait_for_request instead when you know which request matters.
         Reports progress while waiting. A timeout is not an error, just an
         unsettled page: the result says idle=false.
+        Returns whether the network went idle, the seconds waited and the request count.
         """
         if timeout <= 0 or idle_time <= 0:
             raise InvalidArgumentError("timeout and idle_time must be positive")
@@ -463,7 +464,7 @@ class LoggingTools(ToolBase):
         still found; call clear_logs before the action to wait for a fresh one.
         Pass `tab` to accept only that tab's requests.
         Reports progress while waiting. Fails with code 'timeout' when nothing
-        matched in time.
+        matched in time. Returns the first matching request and how long it took to appear.
         """
         if not url_pattern:
             raise InvalidArgumentError("url_pattern must not be empty")
