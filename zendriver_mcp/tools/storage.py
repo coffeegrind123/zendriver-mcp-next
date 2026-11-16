@@ -79,10 +79,12 @@ class StorageTools(ToolBase):
 
     def _register_tools(self) -> None:
         """register storage tools"""
-        self._register(self.get_cookies, Effect.READ, "Page cookies")
-        self._register(self.set_cookie, Effect.WRITE, "Set cookie", idempotent=True)
-        self._register(self.get_local_storage, Effect.READ, "Read localStorage")
-        self._register(self.set_local_storage, Effect.WRITE, "Write localStorage", idempotent=True)
+        self._register(self.read_page_cookies, Effect.READ, "Page cookies")
+        self._register(self.write_cookie, Effect.WRITE, "Write cookie", idempotent=True)
+        self._register(self.read_local_storage, Effect.READ, "Read localStorage")
+        self._register(
+            self.write_local_storage, Effect.WRITE, "Write localStorage", idempotent=True
+        )
         self._register(self.clear_storage, Effect.DESTRUCTIVE, "Clear Web Storage", idempotent=True)
 
     def _page_url(self) -> str:
@@ -93,7 +95,7 @@ class StorageTools(ToolBase):
             )
         return url
 
-    async def get_cookies(self) -> CookieList:
+    async def read_page_cookies(self) -> CookieList:
         """Read the cookies that apply to the current page, HttpOnly ones included.
 
         Use to inspect session state after a login. Read through CDP, so
@@ -108,7 +110,7 @@ class StorageTools(ToolBase):
         summary = f"{len(items)} cookie(s) for {url}" if items else f"(no cookies) for {url}"
         return CookieList(summary=summary, url=url, cookies=items)
 
-    async def set_cookie(
+    async def write_cookie(
         self,
         name: Annotated[str, Field(description="Cookie name. Example: 'session_id'")],
         value: Annotated[str, Field(description="Cookie value, unencoded. Example: 'abc123'")],
@@ -139,7 +141,7 @@ class StorageTools(ToolBase):
         Can set expiry, Secure, HttpOnly and SameSite, which document.cookie
         cannot. Overwrites a cookie with the same name, domain and path. Most
         sites read cookies on load, so reload_page if the change should take
-        effect now.
+        effect now. Returns the cookie as stored.
         """
         if not name:
             raise InvalidArgumentError("name must not be empty")
@@ -191,12 +193,12 @@ class StorageTools(ToolBase):
         self._page_url()
         return str(await self.run_js("location.origin"))
 
-    async def get_local_storage(self) -> StorageItems:
+    async def read_local_storage(self) -> StorageItems:
         """Read every localStorage key and value for the current page's origin.
 
         Use to inspect client-side app state such as auth tokens or feature
         flags. sessionStorage is not included. Read from an isolated world, so
-        the page cannot see the read.
+        the page cannot see the read. Returns the origin and every key and value.
         """
         origin = await self._origin()
         items = await self.run_js(
@@ -208,7 +210,7 @@ class StorageTools(ToolBase):
             summary=f"{len(items)} localStorage key(s) for {origin}", origin=origin, items=items
         )
 
-    async def set_local_storage(
+    async def write_local_storage(
         self,
         key: Annotated[str, Field(description="localStorage key to write. Example: 'theme'")],
         value: Annotated[
@@ -223,7 +225,7 @@ class StorageTools(ToolBase):
         Overwrites any existing value under the same key. Most apps read
         localStorage at load, so reload_page after writing if the change should
         take effect. Written from an isolated world; the page's own scripts see
-        the value but not the write.
+        the value but not the write. Returns the origin and the key written.
         """
         origin = await self._origin()
         await self.run_js(f"localStorage.setItem({json.dumps(key)}, {json.dumps(value)})")
@@ -235,6 +237,7 @@ class StorageTools(ToolBase):
         Use to reset client-side app state between runs. Cookies are NOT cleared —
         this usually will not log a session out on its own; use
         clear_all_cookies for that.
+        Returns the origin and how many localStorage and sessionStorage keys were removed.
         """
         origin = await self._origin()
         counts = await self.run_js(

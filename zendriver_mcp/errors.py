@@ -228,8 +228,20 @@ class AccessibilityUidError(ZendriverMCPError):
 
 # Old tool name -> current name. A saved batch or call_tool payload written
 # against an old name gets the new one in its hint; edit distance alone does not
-# find it (execute_js -> execute_javascript is 8 edits apart).
-RENAMED_TOOLS = {"execute_js": "execute_javascript"}
+# find it (execute_js -> execute_javascript is 8 edits apart). The cookie and
+# storage pairs were renamed because get_cookies/set_cookie-style names, two
+# characters apart, are a measured cause of a model calling the wrong one.
+RENAMED_TOOLS = {
+    "execute_js": "execute_javascript",
+    "get_cookies": "read_page_cookies",
+    "set_cookie": "write_cookie",
+    "get_local_storage": "read_local_storage",
+    "set_local_storage": "write_local_storage",
+    "export_cookies": "save_cookies",
+    "import_cookies": "load_cookies",
+    "export_session": "save_session",
+    "import_session": "load_session",
+}
 
 
 class UnknownToolError(ZendriverMCPError):

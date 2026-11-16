@@ -1,6 +1,6 @@
 """Path sandboxing for tools that write artefacts to disk.
 
-Tools like ``export_cookies``, ``stop_trace``, ``take_heap_snapshot``,
+Tools like ``save_cookies``, ``stop_trace``, ``take_heap_snapshot``,
 ``screenshot`` and ``start_screencast`` accept file paths from the MCP
 client (an LLM agent). Without a guard, a buggy or adversarial agent
 could overwrite files like ``~/.ssh/authorized_keys``.

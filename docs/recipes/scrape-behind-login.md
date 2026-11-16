@@ -10,7 +10,7 @@ start_browser {}
 navigate {"url": "https://example.com/login"}
 # a person signs in in the browser window, including any 2FA
 wait_for_element {"selector": "#dashboard", "timeout": 120}
-call_tool export_cookies {"file_path": "~/.sessions/example.json"}
+call_tool save_cookies {"file_path": "~/.sessions/example.json"}
 → {"count": 23, "files": [{"path": "/home/me/.sessions/example.json", "uri": "browser://artifacts/example.json", ...}]}
 ```
 
@@ -24,7 +24,7 @@ persistent profile with cookies, storage and saved logins.
 
 ```text
 start_browser {}
-call_tool import_cookies {"file_path": "~/.sessions/example.json"}
+call_tool load_cookies {"file_path": "~/.sessions/example.json"}
 navigate {"url": "https://example.com/dashboard"}
 get_text_content {}
 ```

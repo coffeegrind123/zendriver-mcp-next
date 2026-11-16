@@ -1,6 +1,6 @@
 """Cookie import/export via CDP (works on HTTP-only cookies, all domains).
 
-``StorageTools.get_cookies`` covers the current page's cookies. These tools work
+``StorageTools.read_page_cookies`` covers the current page's cookies. These tools work
 on the whole cookie jar through the browser-level ``Storage`` domain
 (``Storage.getCookies`` / ``setCookies`` / ``clearCookies``), so they see every
 site's cookies, including HttpOnly ones, and need no open page: a full
@@ -26,7 +26,7 @@ from zendriver_mcp.storage_restore import origin_of
 from zendriver_mcp.tools.base import ToolBase
 from zendriver_mcp.tools.storage import Cookie, to_cookie
 
-# export_session's file format; import_session also reads export_cookies' array.
+# save_session's file format; load_session also reads save_cookies' array.
 SESSION_FORMAT = 1
 
 
@@ -64,16 +64,16 @@ class CookieTools(ToolBase):
 
     def _register_tools(self) -> None:
         self._register(
-            self.export_cookies, Effect.DESTRUCTIVE, "Export cookies to file", page_scoped=False
+            self.save_cookies, Effect.DESTRUCTIVE, "Save cookies to file", page_scoped=False
         )
-        self._register(self.import_cookies, Effect.WRITE, "Import cookies", page_scoped=False)
+        self._register(self.load_cookies, Effect.WRITE, "Load cookies", page_scoped=False)
         self._register(
-            self.export_session,
+            self.save_session,
             Effect.DESTRUCTIVE,
-            "Export session to file",
+            "Save session to file",
             page_scoped=False,
         )
-        self._register(self.import_session, Effect.WRITE, "Import session", page_scoped=False)
+        self._register(self.load_session, Effect.WRITE, "Load session", page_scoped=False)
         self._register(
             self.clear_all_cookies,
             Effect.DESTRUCTIVE,
@@ -97,7 +97,7 @@ class CookieTools(ToolBase):
         """Return every cookie the browser is holding, across all sites.
 
         Includes HttpOnly cookies. For only the current page's cookies use
-        get_cookies.
+        read_page_cookies.
         """
         cookies = [to_cookie(c) for c in await self._jar()]
         domains = len({c.domain for c in cookies})
@@ -107,7 +107,7 @@ class CookieTools(ToolBase):
             domains=domains,
         )
 
-    async def export_cookies(
+    async def save_cookies(
         self,
         file_path: Annotated[
             str,
@@ -116,9 +116,9 @@ class CookieTools(ToolBase):
             ),
         ] = "",
     ) -> CookieExport:
-        """Save every cookie, HttpOnly included, to a JSON file for import_cookies.
+        """Save every cookie, HttpOnly included, to a JSON file for load_cookies.
 
-        The format is CDP's cookie list, which import_cookies (here or in
+        The format is CDP's cookie list, which load_cookies (here or in
         another session) reads back. The file holds session secrets, so it is
         written owner-only (0600). The file is also served as a resource.
         """
@@ -138,20 +138,20 @@ class CookieTools(ToolBase):
             files=[publish(target, "application/json")],
         )
 
-    async def import_cookies(
+    async def load_cookies(
         self,
         file_path: Annotated[
             str,
             Field(
-                description="JSON file written by export_cookies: an array of CDP cookies. Example: '/tmp/session-cookies.json'"
+                description="JSON file written by save_cookies: an array of CDP cookies. Example: '/tmp/session-cookies.json'"
             ),
         ],
     ) -> CookieImport:
-        """Load cookies from a JSON file produced by export_cookies.
+        """Load cookies from a JSON file produced by save_cookies.
 
         Entries that are not valid cookies are skipped and counted, so a partial
         restore still works. Existing cookies with the same name, domain and
-        path are overwritten.
+        path are overwritten. Returns how many cookies were set and how many entries were skipped.
         """
         source = Path(file_path).expanduser().resolve()
         if not source.is_file():
@@ -184,7 +184,7 @@ class CookieTools(ToolBase):
             summary=f"Imported {len(params)} cookies{suffix}", imported=len(params), skipped=skipped
         )
 
-    async def export_session(
+    async def save_session(
         self,
         file_path: Annotated[
             str,
@@ -193,7 +193,7 @@ class CookieTools(ToolBase):
             ),
         ] = "",
     ) -> SessionExport:
-        """Save the logged-in state, every cookie plus localStorage, for import_session.
+        """Save the logged-in state, every cookie plus localStorage, for load_session.
 
         localStorage is saved for sites open in a tab or iframe now (Chrome
         exposes no others), so open those first. Written owner-only (0600).
@@ -240,16 +240,16 @@ class CookieTools(ToolBase):
             files=[publish(target, "application/json")],
         )
 
-    async def import_session(
+    async def load_session(
         self,
         file_path: Annotated[
             str,
             Field(
-                description="JSON file written by export_session (an export_cookies file is accepted too). Example: '/tmp/session.json'"
+                description="JSON file written by save_session (a save_cookies file is accepted too). Example: '/tmp/session.json'"
             ),
         ],
     ) -> SessionImport:
-        """Restore a state saved by export_session: cookies and localStorage.
+        """Restore a state saved by save_session: cookies and localStorage.
 
         localStorage goes in now for open sites, and for others on their next
         load, before their own scripts run. Returns what was restored now and
@@ -265,7 +265,7 @@ class CookieTools(ToolBase):
         if isinstance(raw, list):
             raw = {"cookies": raw, "local_storage": {}}
         if not isinstance(raw, dict):
-            raise InvalidArgumentError("Session file must be an export_session object.")
+            raise InvalidArgumentError("Session file must be a save_session object.")
 
         params: list[cdp.network.CookieParam] = []
         for entry in raw.get("cookies") or []:
@@ -321,7 +321,7 @@ class CookieTools(ToolBase):
         """Delete every cookie in the browser, for every site.
 
         Logs every site out. To remove one site's state without touching others,
-        use set_cookie with a past expiry, or clear_storage for Web Storage.
+        use write_cookie with a past expiry, or clear_storage for Web Storage. Returns a confirmation.
         """
         await self._conn().send(cdp.storage.clear_cookies())
         return Result(summary="All cookies cleared")

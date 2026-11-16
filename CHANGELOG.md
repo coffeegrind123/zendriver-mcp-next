@@ -7,6 +7,11 @@ All notable changes to this project are documented here. The format follows
 ## [Unreleased]
 
 ### Changed
+- Tools whose names were two characters apart are renamed, because such pairs are a measured
+  cause of a model calling the wrong one: `get_cookies` -> `read_page_cookies`, `set_cookie`
+  -> `write_cookie`, `get_local_storage` -> `read_local_storage`, `set_local_storage` ->
+  `write_local_storage`, `export_cookies` -> `save_cookies`, `import_cookies` ->
+  `load_cookies`. Calls to an old name fail with `unknown_tool` and a hint naming the new one.
 - Tool schemas no longer carry pydantic's `title` annotations or the `anyOf [X, null]` form
   for optional parameters: an optional parameter may be omitted (an explicit null is still
   accepted). Every tool, listed or reached through `call_tool`, states its `required` list.
@@ -52,7 +57,7 @@ All notable changes to this project are documented here. The format follows
 - `open_tabs`: several URLs in new tabs at once, each reported, the active tab unchanged.
 - `screenshot(full_page=true)` (scrolled and stitched, not `captureBeyondViewport`, which the
   page can observe as a resize) and `screenshot(selector=...)`; `save_pdf`.
-- `export_session` / `import_session`: cookies plus localStorage. localStorage for sites not
+- `save_session` / `load_session`: cookies plus localStorage. localStorage for sites not
   open at import is written on their next load, before their own scripts, once.
 - `block_resources`: block images, media, fonts or other resource types on a tab.
 - Opt-in submit guard (`ZENDRIVER_MCP_SUBMIT_GUARD=1`): clicks, Enter presses (HTML implicit

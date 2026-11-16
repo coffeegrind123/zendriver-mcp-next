@@ -105,21 +105,21 @@
 | Tool | Effect | Tab | Listed | Parameters | Summary |
 |---|---|---|---|---|---|
 | `clear_storage` | destructive | tab |  | none | Clear both localStorage and sessionStorage for the current origin. |
-| `get_cookies` | read | tab |  | none | Read the cookies that apply to the current page, HttpOnly ones included. |
-| `get_local_storage` | read | tab |  | none | Read every localStorage key and value for the current page's origin. |
-| `set_cookie` | write | tab |  | `name`, `value`, `domain?`, `path?`, `expires?`, `secure?`, `http_only?`, `same_site?` | Set one cookie for the current page's site, through CDP. |
-| `set_local_storage` | write | tab |  | `key`, `value` | Write one localStorage item for the current page's origin. |
+| `read_local_storage` | read | tab |  | none | Read every localStorage key and value for the current page's origin. |
+| `read_page_cookies` | read | tab |  | none | Read the cookies that apply to the current page, HttpOnly ones included. |
+| `write_cookie` | write | tab |  | `name`, `value`, `domain?`, `path?`, `expires?`, `secure?`, `http_only?`, `same_site?` | Set one cookie for the current page's site, through CDP. |
+| `write_local_storage` | write | tab |  | `key`, `value` | Write one localStorage item for the current page's origin. |
 
 ## Cookie jar (whole browser)
 
 | Tool | Effect | Tab | Listed | Parameters | Summary |
 |---|---|---|---|---|---|
 | `clear_all_cookies` | destructive |  |  | none | Delete every cookie in the browser, for every site. |
-| `export_cookies` | destructive |  |  | `file_path?` | Save every cookie, HttpOnly included, to a JSON file for import_cookies. |
-| `export_session` | destructive |  |  | `file_path?` | Save the logged-in state, every cookie plus localStorage, for import_session. |
-| `import_cookies` | write |  |  | `file_path` | Load cookies from a JSON file produced by export_cookies. |
-| `import_session` | write |  |  | `file_path` | Restore a state saved by export_session: cookies and localStorage. |
 | `list_all_cookies` | read |  |  | none | Return every cookie the browser is holding, across all sites. |
+| `load_cookies` | write |  |  | `file_path` | Load cookies from a JSON file produced by save_cookies. |
+| `load_session` | write |  |  | `file_path` | Restore a state saved by save_session: cookies and localStorage. |
+| `save_cookies` | destructive |  |  | `file_path?` | Save every cookie, HttpOnly included, to a JSON file for load_cookies. |
+| `save_session` | destructive |  |  | `file_path?` | Save the logged-in state, every cookie plus localStorage, for load_session. |
 
 ## Network and console logs
 

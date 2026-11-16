@@ -2,7 +2,7 @@
 
 ``DOMStorage.setDOMStorageItem`` needs a frame of the origin to be open
 ("Frame not found for the given storage id", measured 2026-11-15), so
-import_session can write the open origins directly but not the rest. For those,
+load_session can write the open origins directly but not the rest. For those,
 a document-start script in our isolated world writes the items when a document
 of that origin is created, before the page's own scripts run, so the page finds
 them as if they had always been there. Isolated-world scripts are invisible to

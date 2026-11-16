@@ -61,14 +61,20 @@ async def _call(name: str, args: dict) -> object:
 def test_search_finds_hidden_tools() -> None:
     r = asyncio.run(_call("search_tools", {"query": "read cookies"}))
     names = [m["name"] for m in r.structured_content["matches"]]
-    assert "get_cookies" in names or "list_all_cookies" in names, names
+    assert "read_page_cookies" in names or "list_all_cookies" in names, names
 
 
 def test_call_tool_reports_unknown_names_with_a_suggestion() -> None:
-    r = asyncio.run(_call("call_tool", {"name": "get_cookie", "arguments": {}}))
+    r = asyncio.run(_call("call_tool", {"name": "read_page_cookie", "arguments": {}}))
     assert r.is_error
     assert r.structured_content["code"] == "unknown_tool"
-    assert "get_cookies" in r.structured_content["hint"]
+    assert "read_page_cookies" in r.structured_content["hint"]
+
+
+def test_call_tool_names_the_new_name_of_a_renamed_cookie_tool() -> None:
+    r = asyncio.run(_call("call_tool", {"name": "get_cookies", "arguments": {}}))
+    assert r.structured_content["code"] == "unknown_tool"
+    assert "renamed read_page_cookies" in r.structured_content["hint"]
 
 
 def test_call_tool_names_the_new_name_of_a_renamed_tool() -> None:

@@ -6,7 +6,7 @@ minute or more, so this keeps it inside your client's request timeout.
 
 ```text
 start_browser {}
-call_tool import_cookies {"file_path": "~/.sessions/example.json"}
+call_tool load_cookies {"file_path": "~/.sessions/example.json"}
 navigate {"url": "https://example.com/dashboard"}
 jobs {"action": "start", "tool": "run_lighthouse",
       "arguments": {"url": "https://example.com/dashboard", "form_factor": "mobile",

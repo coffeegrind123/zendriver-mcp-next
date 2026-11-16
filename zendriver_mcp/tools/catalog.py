@@ -468,7 +468,7 @@ def install_catalog(mcp: FastMCP, surface: Surface) -> dict[str, Tool]:
 
     async def describe_tool(
         name: Annotated[
-            str, Field(description="Exact tool name from search_tools. Example: 'set_cookie'")
+            str, Field(description="Exact tool name from search_tools. Example: 'write_cookie'")
         ],
     ) -> ToolDescription:
         """Show one tool's full description, argument schema, result schema and hints.
@@ -495,7 +495,8 @@ def install_catalog(mcp: FastMCP, surface: Surface) -> dict[str, Tool]:
 
     async def call_tool(
         name: Annotated[
-            str, Field(description="Exact tool name from search_tools. Example: 'get_cookies'")
+            str,
+            Field(description="Exact tool name from search_tools. Example: 'read_page_cookies'"),
         ],
         arguments: Annotated[
             dict[str, Any],

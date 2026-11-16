@@ -1,7 +1,7 @@
 """Saving and restoring a logged-in state, in a real Chrome.
 
-export_cookies covered cookies only, while many sites keep their login token in
-localStorage. export_session saves both; import_session restores localStorage
+save_cookies covered cookies only, while many sites keep their login token in
+localStorage. save_session saves both; load_session restores localStorage
 for open sites at once, and for the others before their own scripts run on the
 next load, so the page's very first read finds it.
 """
@@ -36,14 +36,14 @@ async def _scenario(c: Any, sites: Sites, path: str) -> dict[str, Any]:
             "call_tool", {"name": "new_tab", "arguments": {"url": f"{sites.b}/app.html"}}
         )
     )
-    out["export"] = sc(await call("export_session", {"file_path": path}))
+    out["export"] = sc(await call("save_session", {"file_path": path}))
 
     # A fresh browser: new temporary profile, nothing stored.
     sc(await c.call_tool("stop_browser", {}))
     sc(await c.call_tool("start_browser", {"window_size": "1200x900"}))
     # Site B is open before the import (restored now); site A is not (restored on load).
     sc(await c.call_tool("navigate", {"url": f"{sites.b}/blank.html", "settle": 1}))
-    out["import"] = sc(await call("import_session", {"file_path": path}))
+    out["import"] = sc(await call("load_session", {"file_path": path}))
     out["b_now"] = sc(
         await c.call_tool("execute_javascript", {"script": "return localStorage.getItem('token')"})
     )
