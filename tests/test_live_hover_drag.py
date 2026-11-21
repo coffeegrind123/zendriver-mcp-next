@@ -52,6 +52,20 @@ bin.addEventListener('drop', (e) => {{ e.preventDefault(); rec(e);
 </script>"""
 
 
+# A draggable element whose page sets no drag data and listens on every
+# element the drag crosses. drag used to hang here until the call timed out.
+DND_BARE = f"""{LOG}
+<div id="card" draggable="true" style="width:80px;height:40px;background:#9cf">Card</div>
+<div id="mid" style="width:200px;height:60px;margin-top:20px;background:#eee">Middle</div>
+<div id="bin" style="width:200px;height:120px;margin-top:20px;background:#fc9">Drop</div>
+<script>
+for (const el of [card, mid, bin]) for (const t of ['dragstart', 'dragenter', 'dragleave',
+  'dragover', 'drop', 'dragend']) el.addEventListener(t, (e) => {{
+    if (t === 'dragover' || t === 'drop') e.preventDefault();
+    if (t !== 'dragover') rec(e); }});
+</script>"""
+
+
 async def _call(c: Any, name: str, arguments: dict[str, Any]) -> Any:
     """hover and drag are reached through call_tool, as a client of the catalogue does."""
     return await c.call_tool("call_tool", {"name": name, "arguments": arguments})
@@ -79,6 +93,11 @@ async def _scenario(c: Any) -> dict[str, Any]:
     out["dnd"] = sc(await _call(c, "drag", {"source": "#card", "target": "#bin"}))
     out["dnd_log"] = await _js(c, "return log")
     out["dropped"] = await _js(c, "return window.dropped || null")
+
+    sc(await c.call_tool("navigate", {"url": data_url(DND_BARE), "settle": 1}))
+    bare = await asyncio.wait_for(_call(c, "drag", {"source": "#card", "target": "#bin"}), 30)
+    out["bare"] = sc(bare)
+    out["bare_log"] = await _js(c, "return log")
 
     bad = await _call(c, "drag", {"source": "#card"})
     out["bad"] = bad.structured_content if bad.is_error else None
@@ -119,3 +138,9 @@ def test_html5_drag_ends_on_the_source_as_a_real_one_does(run: dict[str, Any]) -
 
 def test_drag_needs_a_target_or_an_offset(run: dict[str, Any]) -> None:
     assert run["bad"] and run["bad"]["code"] == "invalid_argument", run["bad"]
+
+
+def test_html5_drag_without_page_data_completes(run: dict[str, Any]) -> None:
+    log = run["bare_log"]
+    assert "drop:bin:true" in log, log
+    assert log.index("drop:bin:true") < log.index("dragend:card:true"), log

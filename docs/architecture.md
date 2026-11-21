@@ -78,6 +78,24 @@ All DOM work goes through `zendriver_mcp/dom.py`:
   in the error, at the element's own frame and at every enclosing one (a banner over an
   embedded form covers the `<iframe>`). A label or wrapper of the target counts as the
   target, so custom checkboxes still work. `force=true` clicks anyway.
+- **Regions and scoping.** The walker gives each element the landmark it sits in: the
+  nearest `header`, `nav`, `main`, `aside`, `footer`, `form` or search landmark, found
+  across shadow roots. An enclosing modal dialog always wins. Named landmarks carry their
+  name (`form:login`). Nothing is guessed from position. Each landmark element gets an id
+  too (`rid`). `within=` walks the page as usual and then keeps the elements inside one
+  element. That test runs in the isolated world on the walker's own id map, and checks each
+  `<iframe>` owner for the frames, so the page is not walked twice.
+- **Summary view** (`zendriver_mcp/tree_summary.py`) is plain Python over the walked list:
+  it groups by region and kind, folds identical labels, and caps each group. The outline of
+  headings comes from one more isolated-world call.
+- **find_elements** (`zendriver_mcp/ranking.py`) ranks the same walked list by word match,
+  weighted by rarity, with kind and region words as bonuses. `ranker="folate"`
+  (`zendriver_mcp/folate_rank.py`) reads Folate's attribute set for the best 48 candidates
+  in the isolated world, and scores them with the model in a worker thread.
+- **Hover and drag** move the pointer along a Bezier path of `Input.dispatchMouseEvent`
+  moves. A drag sets `Input.setInterceptDrags` for its duration. When Chrome starts a
+  native HTML5 drag, it is finished with `Input.dispatchDragEvent` at the drop point.
+  Otherwise the pointer events alone do the drag.
 - **Arguments** reach scripts as CDP call arguments, never by interpolating strings into
   JavaScript.
 

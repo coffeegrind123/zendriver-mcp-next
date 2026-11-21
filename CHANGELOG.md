@@ -87,6 +87,9 @@ All notable changes to this project are documented here. The format follows
   guess (top 80 px "hdr", left 200 px "side") mislabelled table layouts such as Hacker News.
 - Links and buttons whose name is on a child (a `title`, an `img alt`, an icon's
   `aria-label`) are labelled with it instead of `[a]` or `[button]`.
+- Link and button text of 60 characters or more was dropped, so long headlines were listed
+  as `[a]`. It is now cut at a word to 50 characters and ends with "…". A `title` still
+  wins over cut text.
 - A transparent checkbox or radio laid over its own visible label (Wikipedia's "Main menu")
   is listed, so it can be clicked.
 - Regions are found across shadow roots: a control inside a custom element sits in the form

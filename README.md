@@ -183,6 +183,12 @@ The remaining exposure is documented, not hidden:
 - A full-page `screenshot` scrolls through the page and back with trusted wheel gestures, so
   the page sees scrolling, as for a person reading it. It does not use
   `captureBeyondViewport`, which resizes the viewport and fires a `resize` event in the page.
+- `drag` on a `draggable` element intercepts Chrome's native drag (`Input.setInterceptDrags`)
+  and finishes it at the target. Measured: the page sees `dragenter`, two `dragover`s and
+  `drop` on the target, then `dragend` on the source, all trusted. A person's drag also
+  sends a stream of `dragover`s, and `dragenter`/`dragleave` to every element it crosses.
+  A page that counts those could tell the difference. Pointer drags (sliders, sortable
+  lists) get every pointer move.
 - `block_resources` makes images (or other types) fail to load, which a page can notice.
 - `start_browser(low_memory=true)` adds container-friendly flags such as `--disable-gpu`,
   which produce detectable software WebGL. Use it only where Chrome cannot start without it.
@@ -277,9 +283,12 @@ The `jobs` tool gives every client, whatever it supports, a way to poll long-run
 ```sh
 uv sync --dev
 uv run ruff check . && uv run ruff format --check .
-uv run mypy src
+uv run mypy zendriver_mcp
 uv run pytest                                   # unit, contract and protocol tests
 DISPLAY=:99 ZENDRIVER_MCP_LIVE=1 uv run pytest tests/test_live*.py   # real Chrome
+# find_elements(ranker="folate") live test: needs the extra and a ~107 MB model download
+uv sync --dev --extra folate
+DISPLAY=:99 ZENDRIVER_MCP_LIVE=1 ZENDRIVER_MCP_LIVE_FOLATE=1 uv run pytest tests/test_live_find.py
 uv run python scripts/gen_tool_docs.py          # regenerate docs/tools.md
 ```
 
