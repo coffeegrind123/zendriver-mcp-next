@@ -48,6 +48,7 @@ nav:
   - Tool reference: tools.md
   - Architecture: architecture.md
   - Recipes:
+      - Work a long page: recipes/long-pages.md
       - Get past a Cloudflare challenge: recipes/beat-cloudflare.md
       - Mock an API response: recipes/mock-api-responses.md
       - Audit a page behind a login: recipes/performance-audit.md

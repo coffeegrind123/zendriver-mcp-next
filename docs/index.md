@@ -10,6 +10,7 @@ Protocol, without the side effects that let a page notice automation.
 - [Architecture](architecture.md): how calls flow, the error model, element access, tabs, and
   what a page can observe.
 - Recipes:
+    - [Work a long page without reading all of it](recipes/long-pages.md)
     - [Get past a Cloudflare challenge](recipes/beat-cloudflare.md)
     - [Mock an API response](recipes/mock-api-responses.md)
     - [Audit a page behind a login](recipes/performance-audit.md)

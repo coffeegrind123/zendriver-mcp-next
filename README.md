@@ -10,7 +10,7 @@ a real, headed Chrome, driven over the Chrome DevTools Protocol through
 [zendriver](https://github.com/cdpdriver/zendriver), and built so the page it is looking at
 cannot tell an agent is there.
 
-- **112 browser tools** behind a small fixed tool list: navigation, elements, iframes, forms,
+- **115 browser tools** behind a small fixed tool list: navigation, elements, iframes, forms,
   tabs, dialogs, downloads, cookies and session export, network logs and response bodies,
   mocking and blocking, emulation, accessibility, tracing, Lighthouse, screencasts, PDF and
   more.
@@ -92,6 +92,20 @@ start_browser → navigate(url) → get_interaction_tree → click / type_text /
   combobox, range, date, time, file), found by selector, id, or the label a person reads.
 - **`get_interaction_tree(only_changed=true)`** after an action returns only what it changed,
   plus the ids it removed.
+- **Long pages.** `get_interaction_tree(view="summary")` gives one line per region (`nav:Primary`,
+  `form:login`, `dlg:Cookie consent`), with repeated labels folded into the first id and a
+  count (`Add to cart x30`), select options previewed and an h1–h3 outline. It is about a
+  tenth of the list view on a long page, and every id in it still works.
+  `within="<rid>"` lists one region in full; `within` also takes any selector or id.
+- **`find_elements("Sign in button in header")`** ranks the tree's elements against a
+  description and returns the best ids, without listing the page. The default ranker matches
+  words (label, kind, input type, region, link target). `ranker="folate"` rescores with the
+  [Folate](https://github.com/figranium/folate) ONNX cross-encoder, from the `folate` extra
+  (`pip install 'zendriver-mcp-next[folate]'`). On 31 descriptions across four live sites,
+  words found 28 at 0.03 s a call and Folate 27 at 1.6 s, so Folate is opt-in.
+- **`hover`** opens hover menus with trusted pointer moves. **`drag`** drops one element on
+  another, or moves it by a distance. Sliders get pointer events, and `draggable` elements get
+  a real HTML5 drag with its data.
 - **Dialogs.** An `alert` or `confirm` freezes its tab; tools on it fail at once with
   `dialog_open` until `handle_dialog` answers it, or `set_dialog_policy` answers them all.
 - **Waiting** on single-page apps: `wait_for_element` with `state` (visible, attached, hidden,
@@ -119,14 +133,14 @@ shaped like this:
 
 ## Tools
 
-The default `tools/list` has 19 entries: the core loop below, plus `search_tools`,
+The default `tools/list` has 20 entries: the core loop below, plus `search_tools`,
 `describe_tool`, `call_tool`, `batch` and `jobs`. The core tools are tagged
 `anthropic/alwaysLoad` so that Claude Code's tool search never defers them. Set
-`ZENDRIVER_MCP_SURFACE=full` to list all 117 directly.
+`ZENDRIVER_MCP_SURFACE=full` to list all 120 directly.
 
 | Core (always listed) | Reached through `search_tools` |
 |---|---|
-| `start_browser` `stop_browser` `get_browser_status` `navigate` `get_interaction_tree` `click` `type_text` `press_key` `get_text_content` `screenshot` `execute_javascript` `wait_for_element` `list_tabs` `scroll` | tabs and history · element queries · shadow DOM · forms · human-like mouse and typing · per-page and whole-browser cookies · local storage · network and console logs · request blocking, extra headers, mocking and failure injection · proxy · user agent, locale, timezone, geolocation · device, CPU and network emulation · permissions · accessibility tree · tracing and heap snapshots · Lighthouse · screencast to MP4 · Cloudflare challenge handling · security audit |
+| `start_browser` `stop_browser` `get_browser_status` `navigate` `get_interaction_tree` `find_elements` `click` `type_text` `press_key` `get_text_content` `screenshot` `execute_javascript` `wait_for_element` `list_tabs` `scroll` | tabs and history · element queries · shadow DOM · forms · hover and drag · human-like mouse and typing · per-page and whole-browser cookies · local storage · network and console logs · request blocking, extra headers, mocking and failure injection · proxy · user agent, locale, timezone, geolocation · device, CPU and network emulation · permissions · accessibility tree · tracing and heap snapshots · Lighthouse · screencast to MP4 · Cloudflare challenge handling · security audit |
 
 The full list, with each tool's effect, parameters and summary, is in
 **[docs/tools.md](docs/tools.md)**. That file is generated from the code.
@@ -189,6 +203,7 @@ All settings are optional environment variables.
 | `ZENDRIVER_MCP_SUBMIT_GUARD` | off | Refuses actions that would submit a form or press a send, pay, buy, delete or publish control (code `submit_blocked`), until `allow_next_submit` lets one through. Checks only read the page; nothing in it is patched. |
 | `ZENDRIVER_MCP_ARTIFACT_ROOT` | – | Extra directories, besides `$HOME` and the temp dir, that tools may write files to. |
 | `ZENDRIVER_MCP_SKIP_DISPLAY_CHECK` | off | Skips the X display pre-flight check before launching. |
+| `ZENDRIVER_MCP_FOLATE_MODEL_DIR` | – | A local copy of the Folate weights for `find_elements(ranker="folate")`; without it they download from Hugging Face on first use. |
 | `ZENDRIVER_MCP_CONFIG_DIR` | `~/.config/zendriver-mcp` | Where HTTP tokens are stored. |
 | `ZENDRIVER_MCP_EXTENSIONS_DIR` | `~/.cache/zendriver-mcp/extensions` | Where the bundled extensions are kept (uBlock Origin Lite and I Still Don't Care About Cookies, downloaded on first launch). Falls back to the temp dir when the cache cannot be written; a launch never fails over an extension. |
 

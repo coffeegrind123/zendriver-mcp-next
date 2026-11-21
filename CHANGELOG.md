@@ -20,6 +20,19 @@ All notable changes to this project are documented here. The format follows
   `call_tool`, `batch` or `jobs` fail with `unknown_tool` and a hint naming the new one.
 
 ### Added
+- `get_interaction_tree(view="summary")`: one line per region, with repeated labels folded
+  into the first id and a count, select options previewed, and an h1–h3 outline. Measured on
+  live pages at roughly a tenth of the list view's tokens; every id in it is usable.
+- `get_interaction_tree(within=...)`: only the elements inside one element (selector or id),
+  shadow roots and iframes in it included. A summary names each region's landmark id
+  (`@rid`) to pass here.
+- `find_elements(description)`: the best-matching element ids for a plain-words
+  description, ranked by word match, or with `ranker="folate"` by the Folate cross-encoder
+  (the new `folate` extra). It is a core tool.
+- `hover` and `drag` with trusted input. A drag on a `draggable` element is a real HTML5
+  drag: dropped with its data, and the source gets `dragend`.
+- Regions name their landmark (`nav:Primary`, `form:login`, `dlg:Cookie consent`), and forms
+  and search landmarks are regions.
 - Iframes, same-origin and cross-site, nested at any depth: `get_interaction_tree` walks them
   (their elements carry a frame number `f`, and the result lists the frames), ids, clicks,
   typing and the obstruction check work inside them, a CSS selector that matches nothing in
@@ -70,6 +83,14 @@ All notable changes to this project are documented here. The format follows
   now warns that the script may still be running in the page.
 
 ### Fixed
+- An element outside any landmark no longer gets a region guessed from its position. The
+  guess (top 80 px "hdr", left 200 px "side") mislabelled table layouts such as Hacker News.
+- Links and buttons whose name is on a child (a `title`, an `img alt`, an icon's
+  `aria-label`) are labelled with it instead of `[a]` or `[button]`.
+- A transparent checkbox or radio laid over its own visible label (Wikipedia's "Main menu")
+  is listed, so it can be clicked.
+- Regions are found across shadow roots: a control inside a custom element sits in the form
+  around its host.
 - `scroll(amount=N)` scrolled N percent of the window height, not N pixels as documented
   (measured: 300 scrolled to the bottom of a 2600 px page). It now scrolls N CSS pixels.
 - A path with a NUL byte, or naming an existing directory, given to a tool that writes a file
