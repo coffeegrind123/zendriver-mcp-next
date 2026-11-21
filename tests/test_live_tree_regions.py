@@ -44,6 +44,16 @@ PAGES = {
 <a href="/vote"><div title="upvote" style="width:10px;height:10px;background:#888"></div></a>
 <a href="/home"><img alt="Logo" src="{GIF}" width="20" height="20"></a>
 <button><span aria-label="Close dialog" style="display:inline-block;width:10px;height:10px"></span></button>""",
+    # Wikipedia's "Main menu": a transparent checkbox laid over its visible,
+    # aria-hidden <label>. A person clicks what they see and toggles it.
+    "transparent_control": """
+<input type="checkbox" id="mm" role="button" aria-label="Main menu"
+  style="position:absolute;left:10px;top:10px;width:30px;height:30px;margin:0;opacity:0;z-index:2"
+  onchange="window.toggled = this.checked">
+<label for="mm" aria-hidden="true"
+  style="position:absolute;left:10px;top:10px;width:30px;height:30px;background:#ccc"></label>
+<input type="checkbox" id="lonely" aria-label="No label" style="opacity:0">
+<div style="opacity:0;margin-top:60px"><button>Ghost</button></div>""",
 }
 
 
@@ -52,6 +62,12 @@ async def _scenario(c: Any) -> dict[str, Any]:
     for name, body in PAGES.items():
         sc(await c.call_tool("navigate", {"url": data_url(body), "settle": 1}))
         out[name] = sc(await c.call_tool("get_interaction_tree", {}))["elements"]
+    menu = next((e for e in out["transparent_control"] if e["l"] == "Main menu"), None)
+    if menu:
+        sc(await c.call_tool("click", {"selector": str(menu["id"])}))
+        out["toggled"] = sc(
+            await c.call_tool("execute_javascript", {"script": "return window.toggled"})
+        )["value"]
     return out
 
 
@@ -100,3 +116,15 @@ def test_link_named_by_a_child_title_or_alt(walked: dict[str, Any]) -> None:
     assert "Logo" in labels
     assert "Close dialog" in labels
     assert "[a]" not in labels
+
+
+def test_transparent_control_over_its_visible_label_is_listed(walked: dict[str, Any]) -> None:
+    labels = set(_by_label(walked, "transparent_control"))
+    assert "Main menu" in labels
+    assert walked.get("toggled") is True
+
+
+def test_other_transparent_things_stay_out(walked: dict[str, Any]) -> None:
+    labels = set(_by_label(walked, "transparent_control"))
+    assert "Ghost" not in labels
+    assert "No label" not in labels

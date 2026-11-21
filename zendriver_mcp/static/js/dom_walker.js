@@ -37,10 +37,22 @@ function (...closedRoots) {
   function verdict(el) {
     if (el.inert || el.getAttribute("aria-hidden") === "true") return NodeFilter.FILTER_REJECT;
     const s = getComputedStyle(el);
-    if (s.display === "none" || s.opacity === "0" || s.contentVisibility === "hidden") {
-      return NodeFilter.FILTER_REJECT;
-    }
+    if (s.display === "none" || s.contentVisibility === "hidden") return NodeFilter.FILTER_REJECT;
+    if (s.opacity === "0" && !transparentToggle(el)) return NodeFilter.FILTER_REJECT;
     return NodeFilter.FILTER_ACCEPT;
+  }
+
+  // A transparent checkbox or radio with a visible <label> of its own is how
+  // custom toggles are built: Wikipedia's "Main menu" is an opacity:0 checkbox
+  // over an aria-hidden label. A person clicks what they see and toggles it,
+  // so it is listed; a transparent control with nothing visible is not.
+  function transparentToggle(el) {
+    if (el.tagName !== "INPUT" || !/^(checkbox|radio)$/.test(el.type)) return false;
+    for (const l of el.labels || []) {
+      const r = l.getBoundingClientRect(), ls = getComputedStyle(l);
+      if (r.width > 0 && r.height > 0 && ls.visibility === "visible" && ls.opacity !== "0") return true;
+    }
+    return false;
   }
 
   // Whether an accepted element is itself on screen.
