@@ -80,6 +80,17 @@ function (...closedRoots) {
     return textOf(c);
   }
 
+  // A label at most LABEL_MAX characters, cut at a word and marked with an
+  // ellipsis, so a shortened headline reads as one.
+  const LABEL_MAX = 50;
+  function clip(s) {
+    const t = s.replace(/\s+/g, " ").trim();
+    if (t.length <= LABEL_MAX) return t;
+    const cut = t.slice(0, LABEL_MAX - 1);
+    const space = cut.lastIndexOf(" ");
+    return (space > LABEL_MAX / 2 ? cut.slice(0, space) : cut) + "\u2026";
+  }
+
   // Smart label inference - tries multiple sources
   function lbl(el) {
     // aria-label
@@ -143,6 +154,11 @@ function (...closedRoots) {
 
     // img alt
     if (tag === "IMG" && el.alt) return el.alt;
+
+    // Long text: a name the author gave (title, above) beats copy that has to
+    // be cut, but cut copy beats nothing. It used to be dropped, so every
+    // headline of 60 characters or more was listed as "[a]".
+    if (txt) return txt;
 
     // A name carried by a child: a vote arrow <div title="upvote"> or a logo
     // <img alt> inside a link, an icon <span aria-label> inside a button.
@@ -277,7 +293,7 @@ function (...closedRoots) {
     while (n) {
       if (n !== root && interactive(n) && !skip(n, seen) && shown(n) &&
           !(modal && !composedContains(modal, n))) {
-        const label = lbl(n).replace(/\s+/g, " ").trim().slice(0, 50);
+        const label = clip(lbl(n));
         const t = typ(n);
 
         // Skip unlabeled generic elements
@@ -380,7 +396,7 @@ function (...closedRoots) {
     for (const f of root.querySelectorAll("input[type=file]")) {
       if (seen.has(f) || f.disabled) continue;
       seen.add(f);
-      const o = { id: S.idOf(f), t: "in", l: lbl(f).replace(/\s+/g, " ").trim().slice(0, 50) || "[input]",
+      const o = { id: S.idOf(f), t: "in", l: clip(lbl(f)) || "[input]",
                   it: "file" };
       const reg = rgn(f);
       if (reg) { o.r = reg.r; o.rid = reg.rid; }

@@ -43,7 +43,9 @@ PAGES = {
     "child_labels": f"""
 <a href="/vote"><div title="upvote" style="width:10px;height:10px;background:#888"></div></a>
 <a href="/home"><img alt="Logo" src="{GIF}" width="20" height="20"></a>
-<button><span aria-label="Close dialog" style="display:inline-block;width:10px;height:10px"></span></button>""",
+<button><span aria-label="Close dialog" style="display:inline-block;width:10px;height:10px"></span></button>
+<a href="/story">A story title that is well over sixty characters long, as many headlines are</a>
+<a href="/card" title="Open the card"><h3>A card whose text runs on far past sixty characters of marketing copy</h3></a>""",
     # Wikipedia's "Main menu": a transparent checkbox laid over its visible,
     # aria-hidden <label>. A person clicks what they see and toggles it.
     "transparent_control": """
@@ -116,6 +118,14 @@ def test_link_named_by_a_child_title_or_alt(walked: dict[str, Any]) -> None:
     assert "Logo" in labels
     assert "Close dialog" in labels
     assert "[a]" not in labels
+
+
+def test_long_text_is_shortened_not_dropped(walked: dict[str, Any]) -> None:
+    labels = set(_by_label(walked, "child_labels"))
+    # Text of 60 characters or more used to be thrown away, leaving "[a]".
+    assert "A story title that is well over sixty characters\u2026" in labels, labels
+    # A name the author gave beats copy that has to be cut.
+    assert "Open the card" in labels, labels
 
 
 def test_transparent_control_over_its_visible_label_is_listed(walked: dict[str, Any]) -> None:
