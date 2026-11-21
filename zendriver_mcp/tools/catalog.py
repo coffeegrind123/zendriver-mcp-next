@@ -53,6 +53,7 @@ CORE = [
     "get_browser_status",
     "navigate",
     "get_interaction_tree",
+    "find_elements",
     "click",
     "type_text",
     "press_key",

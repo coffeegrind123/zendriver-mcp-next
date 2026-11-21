@@ -14,6 +14,8 @@ Loop: navigate(url) -> get_interaction_tree -> click / type_text / press_key -> 
 get_text_content or screenshot. navigate waits for the page to settle; do not add a wait after it. \
 Use wait_for_element after a click that loads something.
 
+Long pages: get_interaction_tree(view="summary") lists one line per region with repeats folded (ids still work), within="<rid>" expands one region, and find_elements("Sign in button in header") returns the matching ids without listing the page.
+
 Browser lifecycle: start_browser first (unless the server autostarts), stop_browser when done. \
 Headless is refused: every launch is headed, because headless is what bot detection looks for.
 

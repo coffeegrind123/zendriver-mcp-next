@@ -6,9 +6,9 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 from zendriver.core.connection import ProtocolException
 
-from zendriver_mcp import tree_summary
+from zendriver_mcp import folate_rank, ranking, tree_summary
 from zendriver_mcp.dom import Handle
-from zendriver_mcp.errors import ZendriverMCPError
+from zendriver_mcp.errors import Code, ZendriverMCPError
 from zendriver_mcp.registry import Effect
 from zendriver_mcp.response import Result
 from zendriver_mcp.tools._markdown_js import MARKDOWN_FN
@@ -145,6 +145,17 @@ def delta(before: dict[int, str], after: dict[int, str]) -> tuple[set[int], list
     return changed, removed
 
 
+class FoundElements(Result):
+    matches: list[dict[str, Any]] = Field(
+        description=(
+            "Best matches first, in get_interaction_tree's format plus s, the score "
+            "(word match, or Folate's logit with ranker=folate). Pass id to click or type_text."
+        )
+    )
+    candidates: int = Field(description="How many interactive elements were ranked.")
+    ranker: str = Field(description="The ranker used: words or folate.")
+
+
 class ScrollResult(Result):
     target: str | None = Field(default=None, description="Selector scrolled to, if any.")
     scroll_y: float | None = Field(default=None, description="Vertical scroll position afterwards.")
@@ -166,6 +177,7 @@ class ContentTools(ToolBase):
         self._register(self.get_content, Effect.READ, "Page HTML")
         self._register(self.get_text_content, Effect.READ, "Page text")
         self._register(self.get_interaction_tree, Effect.READ, "Interactive elements")
+        self._register(self.find_elements, Effect.READ, "Find elements by description")
         self._register(self.scroll, Effect.WRITE, "Scroll page")
         self._register(self.scroll_to_element, Effect.WRITE, "Scroll to element", idempotent=True)
 
@@ -448,6 +460,110 @@ class ContentTools(ToolBase):
             frames=frames or None,
             removed=removed,
         )
+
+    async def find_elements(
+        self,
+        description: Annotated[
+            str,
+            Field(
+                description="The element in plain words: its label, kind and region, no filler. Example: 'Sign in button in header'"
+            ),
+        ],
+        top_k: Annotated[
+            int, Field(description="How many matches to return, best first. Example: 5")
+        ] = 5,
+        within: Annotated[
+            str | None,
+            Field(
+                description="Only look inside this element (selector or id), e.g. a summary's @rid. Example: '31'"
+            ),
+        ] = None,
+        ranker: Annotated[
+            Literal["words", "folate"],
+            Field(
+                description="'words' matches label, kind, region and link words, instantly. 'folate' reranks with a local neural model (the folate extra; seconds per call, weights downloaded on first use). Example: 'words'"
+            ),
+        ] = "words",
+    ) -> FoundElements:
+        """Find interactive elements by a description, without listing the page.
+
+        Pairs with get_interaction_tree(view='summary'), which folds repeats and
+        caps each region: describe the one you want here instead of listing
+        everything. Ranks the same elements the tree lists, shadow DOM and
+        iframes included, and leaves no trace in the page. Returns the best
+        matches with their ids and scores.
+        """
+        root = await self.resolve(within) if within else None
+        tree, _frames = await self._walk()
+        elements = [dict(e) for e in tree if isinstance(e, dict)]
+        if root is not None:
+            elements, _inside = await self.dom.scope(root, elements)
+        top_k = max(1, top_k)
+
+        if ranker == "folate":
+            ranked = await self._folate_rank(description, elements)
+        else:
+            ranked = ranking.rank(description, elements)
+
+        matches = []
+        for score, e in ranked[:top_k]:
+            m = {k: v for k, v in e.items() if k not in ("rid", "o", "h")}
+            m["s"] = score
+            matches.append(m)
+        if matches:
+            best = matches[0]
+            where = f" in {best['r']}" if best.get("r") else ""
+            summary = (
+                f"{len(ranked)} match(es) for {description!r} among {len(elements)}; "
+                f"best: {best['id']} {best.get('l', '')} ({best.get('t')}{where})"
+            )
+        else:
+            summary = (
+                f"Nothing among {len(elements)} elements matches {description!r}. Use the "
+                "words on the page (get_interaction_tree view='summary' shows them)"
+                + (", or ranker='folate' for a meaning match" if ranker == "words" else "")
+                + "."
+            )
+        return FoundElements(
+            summary=summary, matches=matches, candidates=len(elements), ranker=ranker
+        )
+
+    async def _folate_rank(
+        self, description: str, elements: list[dict[str, Any]]
+    ) -> list[tuple[float, dict[str, Any]]]:
+        """Folate's scores for the word ranker's best candidates, topped up in page order.
+
+        Topping up lets the model find what shares no word with the description
+        ("Log in" for "sign in"), as Folate's own pre-filter does.
+        """
+        if not folate_rank.available():
+            raise ZendriverMCPError(
+                "ranker='folate' needs the folate package, which is not installed.",
+                code=Code.NOT_INSTALLED,
+                hint="Install the extra: pip install 'zendriver-mcp-next[folate]' (uv sync --extra folate in a checkout), or use ranker='words'.",
+            )
+        picked = [e for _s, e in ranking.rank(description, elements)][: folate_rank.MAX_CANDIDATES]
+        seen = {e["id"] for e in picked}
+        for e in elements:
+            if len(picked) >= folate_rank.MAX_CANDIDATES:
+                break
+            if e["id"] not in seen:
+                picked.append(e)
+                seen.add(e["id"])
+        descs = await self.dom.map_ids(
+            [e["id"] for e in picked],
+            folate_rank.DESCRIBE_FN,
+            list(folate_rank.KEEP_ATTRS),
+            folate_rank.ATTR_CHARS,
+            folate_rank.TEXT_CHARS,
+        )
+        usable = [e for e in picked if isinstance(descs.get(e["id"]), dict)]
+        if not usable:
+            return []
+        serialized = [folate_rank.serialize(descs[e["id"]]) for e in usable]
+        scores = await asyncio.to_thread(folate_rank.score, description, serialized)
+        ranked = sorted(zip(scores, usable, strict=True), key=lambda p: -p[0])
+        return [(round(sc, 3), e) for sc, e in ranked]
 
     async def _summary(
         self,

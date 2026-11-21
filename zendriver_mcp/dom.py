@@ -553,6 +553,42 @@ class Dom:
         numbers = {by_id[i].number for i in inside_frames if i in by_id}
         return out, numbers
 
+    async def map_ids(self, gids: list[int], function: str, *args: Any) -> dict[int, Any]:
+        """Run ``function(localIds, ...args)`` once per frame; map its results back.
+
+        The function gets the frame-local ids of the given tab-wide ids, in the
+        frame's isolated world, and returns one value per id in order. Ids whose
+        document is gone are left out of the result.
+        """
+        groups: dict[tuple[str, str], list[int]] = {}
+        for gid in gids:
+            key = self._ids.get(gid)
+            if key is not None:
+                groups.setdefault((key[0], key[1]), []).append(gid)
+        frames = {(f.frame_id, f.loader_id): f for f in await self.frames()}
+        out: dict[int, Any] = {}
+        for fkey, members in groups.items():
+            frame = frames.get(fkey)
+            if frame is None:
+                continue
+            locals_ = [self._ids[g][2] for g in members]
+            try:
+                ctx = await self._context(frame)
+                remote, exc = await frame.session.send(
+                    cdp.runtime.call_function_on(
+                        function_declaration=function,
+                        execution_context_id=ctx,
+                        arguments=[cdp.runtime.CallArgument(value=v) for v in (locals_, *args)],
+                        return_by_value=True,
+                    )
+                )
+            except ProtocolException:
+                continue
+            if exc is not None or not isinstance(remote.value, list):
+                continue
+            out.update(zip(members, remote.value, strict=False))
+        return out
+
     async def _owner_within(self, root: Handle, child: Frame) -> bool:
         """Whether ``child``'s <iframe> element sits inside ``root``."""
         try:

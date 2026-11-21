@@ -39,6 +39,12 @@ dependencies = [
     "uvicorn>=0.31.1",
 ]
 
+[project.optional-dependencies]
+# find_elements(ranker="folate"): a local ONNX cross-encoder. <0.2 because
+# zendriver_mcp/folate_rank.py uses its finder's tokenizer and session
+# directly (its rank() only takes page HTML).
+folate = ["folate>=0.1.1,<0.2"]
+
 [project.urls]
 Homepage = "https://github.com/coffeegrind123/zendriver-mcp-next"
 Documentation = "https://github.com/coffeegrind123/zendriver-mcp-next/tree/main/docs"
