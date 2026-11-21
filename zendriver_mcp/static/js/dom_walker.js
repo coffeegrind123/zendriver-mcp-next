@@ -207,8 +207,20 @@ function (...closedRoots) {
     return "form";
   }
 
+  // Element.closest across shadow boundaries: a control inside a custom
+  // element's shadow root still sits in the form or nav around its host.
+  function composedClosest(el, sel) {
+    for (let n = el; n; ) {
+      const hit = n.closest(sel);
+      if (hit) return hit;
+      const root = n.getRootNode();
+      n = root instanceof ShadowRoot ? root.host : null;
+    }
+    return null;
+  }
+
   function rgn(el) {
-    const c = el.closest(DIALOG) || el.closest(LANDMARK);
+    const c = composedClosest(el, DIALOG) || composedClosest(el, LANDMARK);
     if (!c) return null;
     let hit = regionCache.get(c);
     if (!hit) {
@@ -311,6 +323,14 @@ function (...closedRoots) {
         // Current value
         if (["in", "sel"].includes(t) && n.value?.trim()) {
           o.v = n.value.trim().slice(0, 30);
+        }
+
+        // A native select's options, for the summary view (the list view drops
+        // them): how many, and the first few as a person reads them.
+        if (n.tagName === "SELECT") {
+          const opts = Array.from(n.options, x => (x.text || "").replace(/\s+/g, " ").trim().slice(0, 25))
+            .filter(Boolean);
+          if (opts.length) o.o = { n: opts.length, s: opts.slice(0, 4) };
         }
 
         // Checked state

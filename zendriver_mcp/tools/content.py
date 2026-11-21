@@ -6,6 +6,8 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 from zendriver.core.connection import ProtocolException
 
+from zendriver_mcp import tree_summary
+from zendriver_mcp.dom import Handle
 from zendriver_mcp.errors import ZendriverMCPError
 from zendriver_mcp.registry import Effect
 from zendriver_mcp.response import Result
@@ -14,6 +16,21 @@ from zendriver_mcp.tools.base import JS_TIMEOUT_SECONDS, ToolBase
 
 # Null-safe: `document.body.innerText` throws while the body does not exist yet.
 _BODY_TEXT_JS = "document.body ? document.body.innerText : ''"
+
+# The first visible h1-h3 headings inside `root`, as "h2 Pricing", repeats dropped.
+_OUTLINE_FN = """function(root, max) {
+  const out = [], seen = new Set();
+  for (const h of root.querySelectorAll("h1,h2,h3")) {
+    const r = h.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0 || getComputedStyle(h).visibility !== "visible") continue;
+    const t = (h.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 60);
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(h.tagName.toLowerCase() + " " + t);
+    if (out.length >= max) break;
+  }
+  return out;
+}"""
 _ELEMENT_TEXT_FN = "function(el) { return el.innerText || el.textContent || ''; }"
 
 
@@ -51,6 +68,7 @@ class TextPage(Page):
 
 class InteractionTree(Result):
     elements: list[dict[str, Any]] = Field(
+        default_factory=list,
         description=(
             "Interactive elements: id (pass to click/type_text), t type (btn, link, in, "
             "chk, rad, sel, tab, mnu, el), l label, r region: the landmark it sits in "
@@ -58,7 +76,7 @@ class InteractionTree(Result):
             "'form:login' when it has one; absent outside any landmark), and when relevant f frame number (absent in the main page), h link "
             "target, it input type, v value, ck checked, req required, dis disabled, "
             "off offscreen, hid hidden (a file input behind a styled button)."
-        )
+        ),
     )
     total: int = Field(description="How many interactive elements the page has.")
     truncated: bool = Field(description="Whether `limit` cut the list short.")
@@ -70,8 +88,22 @@ class InteractionTree(Result):
         default=None,
         description="The iframes walked besides the main page, as {f, url}; absent when there are none.",
     )
+    outline: list[str] | None = Field(
+        default=None,
+        description="view=summary: the first visible h1-h3 headings, as 'h2 Pricing'.",
+    )
+    regions: list[str] | None = Field(
+        default=None,
+        description=(
+            "view=summary: one line per region, 'name @rid | kind: id label; ...'. "
+            "'x30' folds 30 identical entries under the first id; '+N more' counts "
+            "the ones not shown; pass rid as within to list a region in full."
+        ),
+    )
 
     def render(self) -> str:
+        if self.regions is not None:
+            return "\n".join([self.summary, *(self.outline or []), *self.regions])
         payload = json.dumps(self.elements, separators=(",", ":"), ensure_ascii=False)
         lines = []
         if self.frames:
@@ -338,6 +370,18 @@ class ContentTools(ToolBase):
                 description="Also walk closed shadow roots; roughly doubles the walk's time. Example: true"
             ),
         ] = False,
+        view: Annotated[
+            Literal["list", "summary"],
+            Field(
+                description="'summary' gives one line per region with repeats folded, about a tenth of the list on a long page; ids stay usable. Example: 'summary'"
+            ),
+        ] = "list",
+        within: Annotated[
+            str | None,
+            Field(
+                description="Only elements inside this element (selector or id), iframes in it included; a summary's @rid expands that region. Example: '31'"
+            ),
+        ] = None,
     ) -> InteractionTree:
         """List the page's interactive elements, each with a short numeric id.
 
@@ -347,18 +391,26 @@ class ContentTools(ToolBase):
         expire on navigation (stale_id). Leaves no trace in the page. Returns
         the elements (capped at limit), the total, and whether the cap cut it.
         """
+        root = await self.resolve(within) if within else None
         tree, frames = await self._walk(closed_shadow=closed_shadow)
         # The walker always collects link targets; whether the CALLER pays for
         # them is decided here, because the cost is in the returned JSON rather
         # than in the walk. Non-dict entries cannot come from our walker, but it
         # is JavaScript and validates nothing, so they are dropped, not trusted.
         elements = [dict(e) for e in tree if isinstance(e, dict)]
-        for element in elements:
-            element.pop("rid", None)
-            if not links:
+        if view == "list":
+            for element in elements:
+                element.pop("rid", None)
+                element.pop("o", None)
+                if not links:
+                    element.pop("h", None)
+        elif not links:
+            for element in elements:
                 element.pop("h", None)
 
-        # Every walk becomes the baseline for the next only_changed call.
+        # Every walk becomes the baseline for the next only_changed call. The
+        # whole page is, even for a scoped walk, so the next unscoped
+        # only_changed does not report everything outside the scope as new.
         page_key = await self._page_key()
         current = signatures(elements)
         previous = self._baselines.get(self._baseline_slot())
@@ -375,6 +427,14 @@ class ContentTools(ToolBase):
             else:
                 note = "; full tree: no earlier tree of this page to compare with"
 
+        if root is not None:
+            elements, inside = await self.dom.scope(root, elements)
+            frames = [fr for fr in frames if fr.get("f") in inside]
+            note += f"; inside {within}"
+
+        if view == "summary":
+            return await self._summary(elements, frames, root, removed, note)
+
         limit = max(1, limit)
         total = len(elements)
         shown = elements[:limit]
@@ -387,6 +447,29 @@ class ContentTools(ToolBase):
             truncated=total > limit,
             frames=frames or None,
             removed=removed,
+        )
+
+    async def _summary(
+        self,
+        elements: list[dict[str, Any]],
+        frames: list[dict[str, Any]],
+        root: Handle | None,
+        removed: list[int] | None,
+        note: str,
+    ) -> InteractionTree:
+        if root is None:
+            root = await self.dom.root(await self.dom.main_frame())
+        outline = await self.dom.call(root, _OUTLINE_FN, tree_summary.MAX_OUTLINE)
+        return InteractionTree(
+            summary=tree_summary.counts(elements)
+            + note
+            + ". Expand a region: within='<rid>'; find one element: find_elements.",
+            total=len(elements),
+            truncated=False,
+            frames=frames or None,
+            removed=removed,
+            outline=[str(h) for h in outline or []],
+            regions=tree_summary.summarize(elements),
         )
 
     def _baseline_slot(self) -> int:

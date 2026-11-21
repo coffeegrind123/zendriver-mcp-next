@@ -39,7 +39,7 @@
 | Tool | Effect | Tab | Listed | Parameters | Summary |
 |---|---|---|---|---|---|
 | `get_content` | read | tab |  | `max_chars?`, `offset?` | Get the page's full rendered HTML, including markup and attributes. |
-| `get_interaction_tree` | read | tab | yes | `limit?`, `links?`, `only_changed?`, `closed_shadow?` | List the page's interactive elements, each with a short numeric id. |
+| `get_interaction_tree` | read | tab | yes | `limit?`, `links?`, `only_changed?`, `closed_shadow?`, `view?`, `within?` | List the page's interactive elements, each with a short numeric id. |
 | `get_text_content` | read | tab | yes | `max_chars?`, `offset?`, `format?`, `selector?` | Get the page's visible text, without any HTML markup. |
 | `scroll` | write | tab | yes | `direction?`, `amount?` | Scroll the page vertically by a pixel amount. |
 | `scroll_to_element` | write | tab |  | `selector` | Scroll the page until one element is centred in the viewport. |

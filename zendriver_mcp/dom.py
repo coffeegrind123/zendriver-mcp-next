@@ -97,6 +97,23 @@ _STORE_JS = """
 })()
 """
 
+# Whether `el` is `root` or inside it, crossing shadow boundaries.
+_CONTAINS_JS = """
+  const inside = (root, n) => {
+    for (; n; n = n.parentNode || (n instanceof ShadowRoot ? n.host : null)) {
+      if (n === root) return true;
+    }
+    return false;
+  };
+"""
+_CONTAINS_FN = "function(root, el) {" + _CONTAINS_JS + " return inside(root, el); }"
+
+# The walker's local ids, of those given, whose elements sit inside `root`.
+_WITHIN_FN = (
+    "function(root, ids) {" + _CONTAINS_JS + " const S = globalThis.__zd;"
+    " return ids.filter((i) => { const el = S && S.get(i); return !!el && inside(root, el); }); }"
+)
+
 # MouseEvent.buttons bit for each button while it is held (UI Events spec):
 # a real right-button press reports 2, not 1, and pages can read it.
 BUTTON_MASK = {"left": 1, "right": 2, "middle": 4, "back": 8, "forward": 16}
@@ -493,6 +510,73 @@ class Dom:
             if frame.number:
                 listed.append({"f": frame.number, "url": frame.url})
         return elements, listed
+
+    async def scope(
+        self, root: Handle, elements: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], set[int]]:
+        """Keep the walked elements that sit inside ``root``.
+
+        Inside means in ``root``'s composed subtree (shadow roots included), or
+        in an iframe whose <iframe> element is. Returns the kept elements and
+        the frame numbers whose documents are inside. The test runs in our
+        isolated world on the walker's own element store, so the page sees
+        nothing.
+        """
+        frames = await self.frames()
+        by_id = {f.frame_id: f for f in frames}
+        inside_frames: set[str] = set()
+        owner_inside: dict[str, bool] = {}
+        for f in frames:
+            child = f
+            while child.parent is not None and child.parent.frame_id != root.frame.frame_id:
+                child = child.parent
+            if child.parent is None:
+                continue
+            if child.frame_id not in owner_inside:
+                owner_inside[child.frame_id] = await self._owner_within(root, child)
+            if owner_inside[child.frame_id]:
+                inside_frames.add(f.frame_id)
+
+        local: dict[int, int] = {}
+        for e in elements:
+            key = self._ids.get(e["id"])
+            if key is not None and key[0] == root.frame.frame_id:
+                local[key[2]] = e["id"]
+        kept_local = await self.call(root, _WITHIN_FN, sorted(local)) if local else []
+        kept = {local[i] for i in kept_local if i in local}
+
+        out = []
+        for e in elements:
+            key = self._ids.get(e["id"])
+            if e["id"] in kept or (key is not None and key[0] in inside_frames):
+                out.append(e)
+        numbers = {by_id[i].number for i in inside_frames if i in by_id}
+        return out, numbers
+
+    async def _owner_within(self, root: Handle, child: Frame) -> bool:
+        """Whether ``child``'s <iframe> element sits inside ``root``."""
+        try:
+            _session, backend = await self._owner(child)
+            ctx = await self._context(root.frame)
+            owner = await root.frame.session.send(
+                cdp.dom.resolve_node(backend_node_id=backend, execution_context_id=ctx)
+            )
+            if owner.object_id is None:
+                return False
+            remote, exc = await root.frame.session.send(
+                cdp.runtime.call_function_on(
+                    function_declaration=_CONTAINS_FN,
+                    object_id=root.object_id,
+                    arguments=[
+                        cdp.runtime.CallArgument(object_id=root.object_id),
+                        cdp.runtime.CallArgument(object_id=owner.object_id),
+                    ],
+                    return_by_value=True,
+                )
+            )
+        except ProtocolException:
+            return False
+        return exc is None and remote.value is True
 
     async def _walk_frame(
         self, frame: Frame, closed: list[cdp.dom.BackendNodeId]
