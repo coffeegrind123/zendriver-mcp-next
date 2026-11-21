@@ -20,7 +20,11 @@
     {
       "rule": "P009",
       "tool": "execute_javascript",
-      "reason": "Page JavaScript cannot be confined to reads; the read tools (get_text_content, get_interaction_tree, find_element) are the read-only route."
+      "reason": "Page JavaScript cannot be confined to reads; the read tools (get_text_content, get_interaction_tree, find_elements) are the read-only route."
+    },
+    {
+      "rule": "T001",
+      "reason": "mcpgrade counts JSON.stringify(tool), including outputSchema, title, annotations and _meta, which clients do not send to the model. Name + description + inputSchema is ~5,000 tokens (gpt-tokenizer), under the 8,000 budget; outputSchema alone is ~2,840."
     }
   ]
 }
