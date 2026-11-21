@@ -34,6 +34,15 @@ class ElementResult(Result):
     tag: str | None = Field(default=None, description="Tag name of the element acted on.")
 
 
+class DragResult(Result):
+    source: str = Field(description="The element dragged.")
+    mode: str = Field(
+        description="'pointer' (pointer events throughout) or 'html5' (a native drag, dropped)."
+    )
+    start: list[float] = Field(description="Where the press happened, [x, y] in the viewport.")
+    end: list[float] = Field(description="Where the release happened, [x, y] in the viewport.")
+
+
 class ShadowTree(Result):
     target: str = Field(description="The host selector or id described.")
     tree: dict[str, Any] = Field(
@@ -83,6 +92,8 @@ class ElementTools(ToolBase):
         """register element interaction tools"""
         self._register(self.click, Effect.WRITE, "Click element", reach=Reach.WEB)
         self._register(self.click_shadow, Effect.WRITE, "Click inside shadow DOM", reach=Reach.WEB)
+        self._register(self.hover, Effect.WRITE, "Hover element", reach=Reach.WEB)
+        self._register(self.drag, Effect.WRITE, "Drag element", reach=Reach.WEB)
         self._register(self.describe_shadow, Effect.READ, "Describe shadow DOM")
         self._register(self.type_text, Effect.WRITE, "Type text", reach=Reach.WEB)
         self._register(
@@ -144,6 +155,97 @@ class ElementTools(ToolBase):
                 tag=(info.get("tag") or "").lower() or None,
             )
         raise InvalidArgumentError("Pass selector or text.")
+
+    async def hover(
+        self,
+        selector: Annotated[str | None, Field(description=SELECTOR_DESCRIPTION)] = None,
+        text: Annotated[
+            str | None,
+            Field(
+                description="Visible text of the element, matched across light and shadow DOM. Used only when selector is omitted. Example: 'Products'"
+            ),
+        ] = None,
+        force: Annotated[
+            bool,
+            Field(
+                description="Move onto the element's position even when something covers it. Example: false"
+            ),
+        ] = False,
+    ) -> ElementResult:
+        """Move the pointer onto an element and leave it there, to open hover menus.
+
+        Pass selector or text. Trusted pointer moves along a curved path, so the
+        page gets mouseover, mouseenter and :hover as from a person. Follow with
+        get_interaction_tree(only_changed=true) to see what opened. Returns the
+        target and its tag.
+        """
+        if selector:
+            handle = await self.resolve(selector)
+            target = selector
+            info: dict[str, Any] = {}
+        elif text:
+            handle, info = await find_by_text(self, text)
+            target = text
+        else:
+            raise InvalidArgumentError("Pass selector or text.")
+        tag = await self._tag(handle)
+        await self.dom.hover(handle, force=force)
+        return ElementResult(
+            summary=f"Hovering: {target}", target=target, id=info.get("id"), tag=tag
+        )
+
+    async def drag(
+        self,
+        source: Annotated[
+            str,
+            Field(
+                description="Element to drag: CSS selector or a numeric id from get_interaction_tree. Example: '#card-3'"
+            ),
+        ],
+        target: Annotated[
+            str | None,
+            Field(
+                description="Element to drop on (selector or id); its centre is the drop point. Example: '#done-column'"
+            ),
+        ] = None,
+        dx: Annotated[
+            float,
+            Field(
+                description="Without target: horizontal distance in CSS pixels, for sliders and canvases. Example: 120"
+            ),
+        ] = 0,
+        dy: Annotated[
+            float, Field(description="Without target: vertical distance in CSS pixels. Example: 0")
+        ] = 0,
+        force: Annotated[
+            bool,
+            Field(description="Press on the source even when something covers it. Example: false"),
+        ] = False,
+    ) -> DragResult:
+        """Drag an element onto another, or by a distance, with trusted input.
+
+        Presses on the source, moves along a curved path and releases on the
+        target's centre (or the source plus dx, dy). Sliders, sortable lists
+        and canvases get real pointer events; a draggable=true element gets a
+        real HTML5 drag, dropped with its data. Both points must be on screen.
+        Returns which kind of drag it was and the two points.
+        """
+        if target is None and not dx and not dy:
+            raise InvalidArgumentError("Pass target, or a distance with dx and dy.")
+        mode, start, end = await self.dom.drag(
+            source,
+            target=target,
+            offset=None if target is not None else (dx, dy),
+            force=force,
+        )
+        onto = f" onto {target}" if target else f" by ({dx:g}, {dy:g})"
+        return DragResult(
+            summary=f"Dragged {source}{onto} ({mode})",
+            source=source,
+            mode=mode,
+            start=[round(start[0], 1), round(start[1], 1)],
+            end=[round(end[0], 1), round(end[1], 1)],
+        )
 
     async def click_shadow(
         self,

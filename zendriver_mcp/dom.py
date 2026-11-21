@@ -65,9 +65,11 @@ from zendriver_mcp.errors import (
     Code,
     ElementHiddenError,
     ElementNotFoundError,
+    InvalidArgumentError,
     StaleIdError,
     ZendriverMCPError,
 )
+from zendriver_mcp.humaninput import Point, bezier_path, move_mouse, set_last_cursor
 
 # Shown in DevTools' context picker only; pages cannot enumerate worlds. Named
 # like an ordinary extension world rather than after this project.
@@ -113,6 +115,12 @@ _WITHIN_FN = (
     "function(root, ids) {" + _CONTAINS_JS + " const S = globalThis.__zd;"
     " return ids.filter((i) => { const el = S && S.get(i); return !!el && inside(root, el); }); }"
 )
+
+# Seconds the pointer takes to reach an element it hovers, and to travel a drag.
+HOVER_MOVE_SECONDS = 0.25
+DRAG_MOVE_SECONDS = 0.5
+# How long to wait after the path for Chrome to report an HTML5 drag start.
+DRAG_START_WAIT_SECONDS = 0.2
 
 # MouseEvent.buttons bit for each button while it is held (UI Events spec):
 # a real right-button press reports 2, not 1, and pages can read it.
@@ -1110,6 +1118,120 @@ class Dom:
                 )
             )
         return handle
+
+    async def _uncovered(self, handle: Handle, x: float, y: float) -> None:
+        blocker = await self.obstruction(handle, x, y)
+        if blocker:
+            raise ZendriverMCPError(
+                f"{blocker} covers {handle.label} at ({x:.0f}, {y:.0f}).",
+                code=Code.ELEMENT_OBSCURED,
+                hint="Close the overlay on top (a cookie banner, a modal) or scroll so "
+                "the element is unobstructed. force=true acts at that point anyway.",
+            )
+
+    async def hover(self, selector: str | Handle, *, force: bool = False) -> Handle:
+        """Move the pointer onto the element along a curved path, as trusted moves.
+
+        The page receives mouseover, mouseenter and :hover exactly as from a
+        person's mouse. The path starts where the last pointer action left it.
+        """
+        handle = selector if isinstance(selector, Handle) else await self.resolve(selector)
+        x, y = await self.center(handle)
+        if not force:
+            await self._uncovered(handle, x, y)
+        await move_mouse(self.tab, Point(x, y), duration=HOVER_MOVE_SECONDS)
+        return handle
+
+    async def drag(
+        self,
+        source: str | Handle,
+        *,
+        target: str | Handle | None = None,
+        offset: tuple[float, float] | None = None,
+        force: bool = False,
+    ) -> tuple[str, tuple[float, float], tuple[float, float]]:
+        """Press on ``source``, move along a curved path, release on the target point.
+
+        The point is ``target``'s centre, or ``source``'s centre plus ``offset``.
+        Pointer-driven widgets (sliders, sortable lists, canvases) get the
+        pointer events as they come. An HTML5 drag (draggable=true) would start
+        a native drag loop that synthesized input cannot drive, so the drag is
+        intercepted when Chrome begins one, and finished with trusted
+        dragenter, dragover and drop at the point. Returns the mode ("pointer"
+        or "html5") and the start and end points.
+        """
+        src = source if isinstance(source, Handle) else await self.resolve(source)
+        sx, sy = await self.center(src)
+        if not force:
+            await self._uncovered(src, sx, sy)
+        if target is not None:
+            tgt = target if isinstance(target, Handle) else await self.resolve(target)
+            tx, ty = await self.center(tgt, scroll=False)
+        elif offset is not None:
+            tx, ty = sx + offset[0], sy + offset[1]
+        else:
+            raise InvalidArgumentError("Pass target, or an offset (dx, dy).")
+        _px, _py, width, height, _content = await self.viewport()
+        if not (0 <= tx < width and 0 <= ty < height):
+            raise ZendriverMCPError(
+                f"The drop point ({tx:.0f}, {ty:.0f}) is outside the {width:.0f}x{height:.0f} viewport.",
+                code=Code.ELEMENT_HIDDEN,
+                hint="Scroll so the source and the drop point are both on screen, or start "
+                "the browser with a larger window_size.",
+            )
+
+        await move_mouse(self.tab, Point(sx, sy), duration=HOVER_MOVE_SECONDS)
+        loop = asyncio.get_running_loop()
+        intercepted: asyncio.Future[cdp.input_.DragData] = loop.create_future()
+
+        def on_drag(event: cdp.input_.DragIntercepted) -> None:
+            if not intercepted.done():
+                intercepted.set_result(event.data)
+
+        left = cdp.input_.MouseButton.LEFT
+        self.tab.add_handler(cdp.input_.DragIntercepted, on_drag)
+        await self.tab.send(cdp.input_.set_intercept_drags(enabled=True))
+        try:
+            await self.tab.send(
+                cdp.input_.dispatch_mouse_event(
+                    type_="mousePressed", x=sx, y=sy, button=left, click_count=1, buttons=1
+                )
+            )
+            path = bezier_path(Point(sx, sy), Point(tx, ty), steps=int(DRAG_MOVE_SECONDS * 120))
+            pause = DRAG_MOVE_SECONDS / len(path)
+            for p in path:
+                await self.tab.send(
+                    cdp.input_.dispatch_mouse_event(
+                        type_="mouseMoved", x=p.x, y=p.y, button=left, buttons=1
+                    )
+                )
+                await asyncio.sleep(pause)
+                if intercepted.done():
+                    break
+            if not intercepted.done():
+                await asyncio.wait({intercepted}, timeout=DRAG_START_WAIT_SECONDS)
+
+            mode = "pointer"
+            if intercepted.done():
+                mode = "html5"
+                data = intercepted.result()
+                for kind in ("dragEnter", "dragOver", "drop"):
+                    await self.tab.send(
+                        cdp.input_.dispatch_drag_event(type_=kind, x=tx, y=ty, data=data)
+                    )
+            await self.tab.send(
+                cdp.input_.dispatch_mouse_event(
+                    type_="mouseReleased", x=tx, y=ty, button=left, click_count=1, buttons=0
+                )
+            )
+        finally:
+            self.tab.remove_handlers(cdp.input_.DragIntercepted, on_drag)
+            try:
+                await self.tab.send(cdp.input_.set_intercept_drags(enabled=False))
+            except ProtocolException:
+                pass
+        set_last_cursor(self.tab, Point(tx, ty))
+        return mode, (sx, sy), (tx, ty)
 
     async def viewport(self) -> tuple[float, float, float, float, float]:
         """The tab's scroll position, viewport size and content height, in CSS pixels.
