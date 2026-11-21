@@ -53,8 +53,9 @@ class InteractionTree(Result):
     elements: list[dict[str, Any]] = Field(
         description=(
             "Interactive elements: id (pass to click/type_text), t type (btn, link, in, "
-            "chk, rad, sel, tab, mnu, el), l label, r region (hdr, nav, main, side, ftr, "
-            "dlg), and when relevant f frame number (absent in the main page), h link "
+            "chk, rad, sel, tab, mnu, el), l label, r region: the landmark it sits in "
+            "(hdr, nav, main, side, ftr, form, search, dlg, with its name as in "
+            "'form:login' when it has one; absent outside any landmark), and when relevant f frame number (absent in the main page), h link "
             "target, it input type, v value, ck checked, req required, dis disabled, "
             "off offscreen, hid hidden (a file input behind a styled button)."
         )
@@ -85,9 +86,9 @@ class InteractionTree(Result):
         return "\n".join(lines)
 
 
-# Fields that move with scrolling rather than with the page: an element that
-# scrolled into view has not changed.
-_UNSTABLE = ("id", "off", "r")
+# Fields that are not the element itself: "off" moves with scrolling, and "rid"
+# is the id of the landmark around it, which a re-rendered wrapper renews.
+_UNSTABLE = ("id", "off", "rid")
 
 
 def signatures(elements: list[dict[str, Any]]) -> dict[int, str]:
@@ -352,8 +353,9 @@ class ContentTools(ToolBase):
         # than in the walk. Non-dict entries cannot come from our walker, but it
         # is JavaScript and validates nothing, so they are dropped, not trusted.
         elements = [dict(e) for e in tree if isinstance(e, dict)]
-        if not links:
-            for element in elements:
+        for element in elements:
+            element.pop("rid", None)
+            if not links:
                 element.pop("h", None)
 
         # Every walk becomes the baseline for the next only_changed call.

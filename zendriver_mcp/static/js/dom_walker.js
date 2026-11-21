@@ -132,6 +132,15 @@ function (...closedRoots) {
     // img alt
     if (tag === "IMG" && el.alt) return el.alt;
 
+    // A name carried by a child: a vote arrow <div title="upvote"> or a logo
+    // <img alt> inside a link, an icon <span aria-label> inside a button.
+    // Without this such controls were listed as "[a]" and "[button]".
+    for (const c of el.querySelectorAll("[aria-label],[title],img[alt]")) {
+      const t = (c.getAttribute("aria-label") || c.getAttribute("title") ||
+                 c.getAttribute("alt") || "").trim();
+      if (t) return t;
+    }
+
     return "";
   }
 
@@ -157,24 +166,58 @@ function (...closedRoots) {
     return "el";
   }
 
-  // Region detection (compact: 1-4 chars)
-  function rgn(el) {
-    const c = el.closest("[role='banner'],header,[role='navigation'],nav,[role='main'],main,[role='contentinfo'],footer,aside,[role='complementary'],[role='dialog'],[aria-modal='true']");
-    if (c) {
-      const r = c.getAttribute("role"), t = c.tagName.toLowerCase();
-      if (r === "banner" || t === "header") return "hdr";
-      if (r === "navigation" || t === "nav") return "nav";
-      if (r === "main" || t === "main") return "main";
-      if (r === "contentinfo" || t === "footer") return "ftr";
-      if (r === "complementary" || t === "aside") return "side";
-      if (r === "dialog" || c.getAttribute("aria-modal") === "true") return "dlg";
+  // Region: the landmark an element sits in, as {r, rid}, or null.
+  //
+  // A modal dialog wins over everything, since it is what an agent must deal
+  // with first; otherwise the nearest landmark, so a search form inside the
+  // header is the form. Named landmarks carry their name ("nav:Primary",
+  // "form:login", "dlg:Cookie consent"). `rid` numbers the landmark element
+  // itself, so get_interaction_tree(within=rid) can expand one region.
+  //
+  // There is no fallback from position. One used to call anything within 80 px
+  // of the top "hdr" and within 200 px of the left "side": on a table layout
+  // that tagged story titles "side" and their domains "main".
+  const DIALOG = "dialog[open],[role='dialog'],[role='alertdialog'],[aria-modal='true']";
+  const LANDMARK = "[role='banner'],header,[role='navigation'],nav,[role='main'],main," +
+    "[role='contentinfo'],footer,aside,[role='complementary'],form,[role='form'],[role='search']";
+  const regionCache = new Map();
+
+  function landmarkName(c) {
+    let n = c.getAttribute("aria-label") || "";
+    if (!n) {
+      const by = c.getAttribute("aria-labelledby");
+      if (by) {
+        n = by.trim().split(/\s+/).map(id => byId(c, id)).filter(Boolean).map(textOf).join(" ");
+      }
     }
-    // Heuristic
-    const rect = el.getBoundingClientRect();
-    if (rect.top < 80) return "hdr";
-    if (rect.left < 200 && rect.top > 80) return "side";
-    if (rect.top > vh - 80) return "ftr";
-    return "main";
+    const t = c.tagName.toLowerCase();
+    if (!n && t === "form") n = c.getAttribute("name") || c.id || "";
+    return n.replace(/\s+/g, " ").trim().slice(0, 25);
+  }
+
+  function landmarkKind(c) {
+    const r = c.getAttribute("role"), t = c.tagName.toLowerCase();
+    if (c.matches(DIALOG)) return "dlg";
+    if (r === "banner" || t === "header") return "hdr";
+    if (r === "navigation" || t === "nav") return "nav";
+    if (r === "main" || t === "main") return "main";
+    if (r === "contentinfo" || t === "footer") return "ftr";
+    if (r === "complementary" || t === "aside") return "side";
+    if (r === "search") return "search";
+    return "form";
+  }
+
+  function rgn(el) {
+    const c = el.closest(DIALOG) || el.closest(LANDMARK);
+    if (!c) return null;
+    let hit = regionCache.get(c);
+    if (!hit) {
+      const name = landmarkName(c);
+      const kind = landmarkKind(c);
+      hit = { r: name ? `${kind}:${name}` : kind, rid: S.idOf(c) };
+      regionCache.set(c, hit);
+    }
+    return hit;
   }
 
   function interactive(el) {
@@ -219,7 +262,9 @@ function (...closedRoots) {
         const i = S.idOf(n);
         seen.add(n);
 
-        const o = { id: i, t: t, l: label || `[${n.tagName.toLowerCase()}]`, r: rgn(n) };
+        const o = { id: i, t: t, l: label || `[${n.tagName.toLowerCase()}]` };
+        const reg = rgn(n);
+        if (reg) { o.r = reg.r; o.rid = reg.rid; }
 
         // Link target.
         //
@@ -304,7 +349,9 @@ function (...closedRoots) {
       if (seen.has(f) || f.disabled) continue;
       seen.add(f);
       const o = { id: S.idOf(f), t: "in", l: lbl(f).replace(/\s+/g, " ").trim().slice(0, 50) || "[input]",
-                  r: rgn(f), it: "file" };
+                  it: "file" };
+      const reg = rgn(f);
+      if (reg) { o.r = reg.r; o.rid = reg.rid; }
       if (!shown(f)) o.hid = true;
       out.push(o);
     }

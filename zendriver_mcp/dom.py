@@ -479,6 +479,8 @@ class Dom:
             origin = _origin_of(frame.url)
             for e in raw:
                 e["id"] = self.global_id(frame, e["id"])
+                if isinstance(e.get("rid"), int):
+                    e["rid"] = self.global_id(frame, e["rid"])
                 if frame.number:
                     e["f"] = frame.number
                     # The walker shortens same-origin links to a path; relative

@@ -1,7 +1,10 @@
 """only_changed: what an action did to the page, without the whole tree again.
 
 Ids name one element for its whole life, so comparing two trees by id is
-exact. Fields that move with scrolling (offscreen, region) are not changes.
+exact. Offscreen moves with scrolling and is not a change. A region is the
+landmark an element sits in, not a guess from its position, so a new region is
+a change; the landmark's own id (rid) is not, since a re-rendered wrapper says
+nothing about the element.
 """
 
 from __future__ import annotations
@@ -35,8 +38,16 @@ def test_new_changed_and_removed() -> None:
 
 def test_scrolling_is_not_a_change() -> None:
     before = signatures([{"id": 1, "t": "btn", "l": "Buy", "r": "main", "off": True}])
-    after = signatures([{"id": 1, "t": "btn", "l": "Buy", "r": "hdr"}])
+    after = signatures([{"id": 1, "t": "btn", "l": "Buy", "r": "main"}])
     assert delta(before, after) == (set(), [])
+
+
+def test_a_new_region_is_a_change_a_new_landmark_id_is_not() -> None:
+    before = signatures([{"id": 1, "t": "btn", "l": "Buy", "r": "main", "rid": 7}])
+    moved = signatures([{"id": 1, "t": "btn", "l": "Buy", "r": "dlg", "rid": 9}])
+    rewrapped = signatures([{"id": 1, "t": "btn", "l": "Buy", "r": "main", "rid": 8}])
+    assert delta(before, moved) == ({1}, [])
+    assert delta(before, rewrapped) == (set(), [])
 
 
 def _tools(trees: list[list[dict[str, Any]]], keys: list[str]) -> ContentTools:
